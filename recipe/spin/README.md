@@ -24,12 +24,6 @@ This `verl` recipe draws inspiration from SPIN's core idea by implementing model
 
 The hallmark of **online DPO** is that preference data is generated and incorporated "on the fly" or dynamically during the training process. This allows the model to learn from its own generated data, rather than relying on a fixed external dataset.
 
----
-
-Here's a more concise and comparative "Related Work" section, incorporating the implementation details.
-
----
-
 ## Related Work
 
 This `verl` recipe is built on the principles of **Direct Preference Optimization (DPO)** and **Self-Play Fine-Tuning (SPIN)**, aiming to leverage their synergies for language model alignment.
