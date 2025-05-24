@@ -26,13 +26,7 @@ The hallmark of **online DPO** is that preference data is generated and incorpor
 
 ## Related Work
 
-This `verl` recipe is built on the principles of **Direct Preference Optimization (DPO)** and **Self-Play Fine-Tuning (SPIN)**, aiming to leverage their synergies for language model alignment.
-
-**Direct Preference Optimization (DPO)** (Rafailov et al., 2023) introduced a groundbreaking method to directly fine-tune language models with preference data, bypassing the need for an explicit reward model or complex reinforcement learning pipelines like PPO. This simplification makes DPO a highly efficient alignment algorithm.
-
-Our work is directly inspired by **Self-Play Fine-Tuning (SPIN)** (Chen et al., 2024), which proposes an iterative self-improvement mechanism where a language model generates its own training data by "playing" against its prior versions. A critical finding in the SPIN paper is that its training objective, when using a logistic loss, is **mathematically equivalent to DPO loss**. This fundamental equivalence is what allows us to realize SPIN's self-play paradigm through an **iterative online DPO** approach.
-
-The concept of **iterative preference learning** is also explored in works such as those by Xiong et al. (2023), which discuss bridging theory and practice for RLHF under KL-constraints, and Guo et al. (2024), focusing on direct alignment from online AI feedback. These papers highlight the advantages of dynamically generated feedback and reinforce the effectiveness of iterative updates—principles central to our online DPO implementation.
+The concept of iterative preference learning is also explored in works such as those by Xiong et al. (2023), which discuss bridging theory and practice for RLHF under KL-constraints, and Guo et al. (2024), focusing on direct alignment from online AI feedback. These papers highlight the advantages of dynamically generated feedback and reinforce the effectiveness of iterative updates—principles central to our online DPO implementation.
 
 By combining the direct optimization power of DPO with SPIN's self-play mechanism and an online data generation loop, our recipe enables a novel approach to continuously refine language models without relying on fixed external preference datasets.
 
