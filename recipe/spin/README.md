@@ -182,7 +182,6 @@ The following steps outline how to set up the environment and run the SPIN recip
 We sincerely thank the contribution and guidance from the `verl` community and advisors, including (adapted from SPPO):
 
 * [Zixaing Chen](https://sites.google.com/view/zxchen)
-* [Yue Wu](https://yuewu.us/)
 * [Yuhao Yang](https://github.com/yhyang201)
 * [Yifan Zhang](https://github.com/yifanzhang-pro)
 * [Yongan Xiang](https://github.com/BearBiscuit05)
