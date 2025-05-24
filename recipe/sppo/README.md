@@ -47,4 +47,5 @@ We sincerely thank the contribution and guidance from:
 - [Guangming Shen](https://github.com/PeterSH6)
 - [Biao He](https://www.linkedin.com/in/biao-he/)
 - [Qingquan Song](https://qingquansong.github.io/)
+- [Chenyang Zhao](https://zhaochenyang20.github.io/Chayenne/)
 - [Quanquan Gu](https://web.cs.ucla.edu/~qgu/)
