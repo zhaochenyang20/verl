@@ -26,6 +26,7 @@ When working with Megatron:
 - After inference, all the parameters that doesn't belong to this pp rank is freed.
 """
 
+import time
 import logging
 import os
 import pickle
@@ -310,12 +311,17 @@ class vLLMRollout(BaseRollout):
 
         # users can customize different sampling_params at different run
         with self.update_sampling_params(**kwargs):
+            torch.cuda.synchronize()
+            start_time = time.time()
             outputs = self.inference_engine.generate(
                 prompts=vllm_inputs,  # because we have already convert it to prompt token id
                 sampling_params=self.sampling_params,
                 lora_request=lora_requests,
                 use_tqdm=False,
             )
+            torch.cuda.synchronize()
+            generate_end_time = time.time()
+            print(f"Time taken for self.inference_engine.generate: {generate_end_time - start_time} seconds")
 
             # TODO(sgm): disable logprob when recompute_log_prob is enable
             # if n = 1: (bs, response_length) ; if n > 1: (bs * n, response_length)
