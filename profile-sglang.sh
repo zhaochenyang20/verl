@@ -48,7 +48,7 @@ COMMAND="nohup bash examples/grpo_trainer/run_qwen2-7b_seq_balance.sh trainer.ex
 
 run_command() {
     echo "Running command: $1"
-    # eval "$1"
+    eval "$1"
 }
 
 run_command "${COMMAND}"
