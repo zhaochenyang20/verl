@@ -597,7 +597,7 @@ class SGLangRollout(BaseRollout):
 
         batch_size = idx.size(0)
         print(f"batch_size: {batch_size}")
-        
+
         # Extract non-tensor data
         non_tensor_batch = prompts.non_tensor_batch
         if "raw_prompt_ids" not in non_tensor_batch:

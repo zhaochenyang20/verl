@@ -1,7 +1,28 @@
 set -x
 
+# parse command line arguments
+TP_SIZE=""
+OTHER_ARGS=""
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --tp)
+            TP_SIZE="$2"
+            shift 2
+            ;;
+        *)
+            OTHER_ARGS="$OTHER_ARGS $1"
+            shift
+            ;;
+    esac
+done
 
 # For async rollout mode, dataset should return raw chat.
+
+# only for vllm
+
+# rollout_mode="async"
+
+
 rollout_name="sglang"
 if [ "$rollout_mode" = "async" ]; then
     export VLLM_USE_V1=1
@@ -31,7 +52,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
-    actor_rollout_ref.rollout.tensor_model_parallel_size=2 \
+    actor_rollout_ref.rollout.tensor_model_parallel_size=${TP_SIZE} \
     actor_rollout_ref.rollout.name=$rollout_name \
     actor_rollout_ref.rollout.mode=$rollout_mode \
     actor_rollout_ref.rollout.multi_turn.format=hermes \
@@ -48,4 +69,4 @@ python3 -m verl.trainer.main_ppo \
     trainer.nnodes=1 \
     trainer.save_freq=20 \
     trainer.test_freq=5 \
-    trainer.total_epochs=15 $@
+    trainer.total_epochs=15 $OTHER_ARGS
