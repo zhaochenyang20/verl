@@ -598,7 +598,8 @@ class SGLangRollout(BaseRollout):
         eos_token_id = prompts.meta_info["eos_token_id"]
 
         batch_size = idx.size(0)
-
+        print(f"batch_size: {batch_size}")
+        
         # Extract non-tensor data
         non_tensor_batch = prompts.non_tensor_batch
         if "raw_prompt_ids" not in non_tensor_batch:
