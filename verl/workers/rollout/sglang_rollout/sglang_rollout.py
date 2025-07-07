@@ -675,6 +675,8 @@ class SGLangRollout(BaseRollout):
         # Update with any additional kwargs
         request_sampling_params.update(kwargs)
 
+        torch.cuda.synchronize()
+        start_time = time.time()
         if self._tp_rank == 0:
             loop = asyncio.get_event_loop()
             output = loop.run_until_complete(
@@ -686,11 +688,17 @@ class SGLangRollout(BaseRollout):
                     image_data=image_list,
                 )
             )
+            torch.cuda.synchronize()
+            generate_end_time = time.time()
+            print(f"Time taken for self._engine.async_generate: {generate_end_time - start_time} seconds")
         else:
             output = None
 
         # Most naive implementation, can extract tensor and send via gloo if too slow
         dist.barrier()
+        torch.cuda.synchronize()
+        barrier_end_time = time.time()
+        print(f"Time taken for barrier: {barrier_end_time - start_time} seconds")
         [output] = broadcast_pyobj(
             data=[output],
             rank=self._rank,
