@@ -66,7 +66,7 @@ fi
     algorithm.use_kl_in_reward=False \
     trainer.critic_warmup=0 \
     trainer.logger=['console','wandb'] \
-    trainer.project_name='verl_grpo_example_gsm8k' \
+    trainer.project_name='verl-profile-sglang' \
     trainer.experiment_name='qwen2_7b_function_rm_kl1e-3' \
     trainer.val_before_train=False \
     trainer.n_gpus_per_node=8 \
