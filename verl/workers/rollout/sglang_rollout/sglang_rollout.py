@@ -679,7 +679,7 @@ class SGLangRollout(BaseRollout):
         request_sampling_params.update(kwargs)
 
         torch.cuda.synchronize()
-        start_time = time.time()
+        engine_call_start_time = time.time()
         if self._tp_rank == 0:
             loop = asyncio.get_event_loop()
             output = loop.run_until_complete(
@@ -693,15 +693,17 @@ class SGLangRollout(BaseRollout):
             )
             torch.cuda.synchronize()
             generate_end_time = time.time()
-            print(f"Time taken for self._engine.async_generate: {generate_end_time - start_time} seconds")
+            print(f"Time taken for self._engine.async_generate: {generate_end_time - engine_call_start_time} seconds")
         else:
             output = None
 
+        torch.cuda.synchronize()
+        barrier_start_time = time.time()
         # Most naive implementation, can extract tensor and send via gloo if too slow
         dist.barrier()
         torch.cuda.synchronize()
         barrier_end_time = time.time()
-        print(f"Time taken for barrier: {barrier_end_time - start_time} seconds")
+        print(f"Time taken for barrier: {barrier_end_time - barrier_start_time} seconds")
         [output] = broadcast_pyobj(
             data=[output],
             rank=self._rank,
@@ -812,13 +814,24 @@ class SGLangRollout(BaseRollout):
         # Update with any additional kwargs
         request_sampling_params.update(kwargs)
 
+        torch.cuda.synchronize()
+        main_loop_start_time = time.time()
         while current_turns < self.config.multi_turn.max_assistant_turns:
             if _req.state == AsyncRolloutRequestStateEnum.PENDING:
+                torch.cuda.synchronize()
+                pending_start_time = time.time()
                 await self._handle_pending_state(_req)
                 _req.state = AsyncRolloutRequestStateEnum.RUNNING
+                torch.cuda.synchronize()
+                pending_end_time = time.time()
+                print(f"Time taken for pending state handling: {pending_end_time - pending_start_time} seconds")
             elif _req.state == AsyncRolloutRequestStateEnum.TOOL_CALLING:
+                torch.cuda.synchronize()
+                tool_calling_start_time = time.time()
                 if _req.messages[-1].tool_calls is not None:
                     parsed_tool_calls = _req.messages[-1].tool_calls
+                    torch.cuda.synchronize()
+                    tool_execution_start_time = time.time()
                     tool_call_results = await asyncio.gather(
                         *[
                             self._tool_map[tool_call.function.name].execute(
@@ -829,16 +842,39 @@ class SGLangRollout(BaseRollout):
                             for tool_call in parsed_tool_calls
                         ]
                     )
+                    torch.cuda.synchronize()
+                    tool_execution_end_time = time.time()
+                    print(
+                        f"Time taken for tool execution: {tool_execution_end_time - tool_execution_start_time} seconds"
+                    )
+
+                    torch.cuda.synchronize()
+                    tool_response_start_time = time.time()
                     _req.add_tool_response_messages(self.processing_class, [resp for resp, _, _ in tool_call_results])
                     for tool_call, (resp, reward, metrics) in zip(parsed_tool_calls, tool_call_results):
                         _req.update_metrics(metrics, tool_call.function.name)
+                    torch.cuda.synchronize()
+                    tool_response_end_time = time.time()
+                    print(
+                        f"Time taken for tool response processing in tool calling state: "
+                        f"{tool_response_end_time - tool_response_start_time} seconds"
+                    )
+
                     if len(_req.input_ids) >= self.config.max_model_len:
                         finish_reason_type = FinishReasonTypeEnum.STOP
                         break
                     _req.state = AsyncRolloutRequestStateEnum.RUNNING
                 else:
                     raise ValueError(f"Unexpected tool calling last message state: {_req.messages[-1]}")
+                torch.cuda.synchronize()
+                tool_calling_end_time = time.time()
+                print(
+                    f"Time taken for tool calling state in _async_rollout_a_request: "
+                    f"{tool_calling_end_time - tool_calling_start_time} seconds"
+                )
             elif _req.state == AsyncRolloutRequestStateEnum.RUNNING:
+                torch.cuda.synchronize()
+                running_start_time = time.time()
                 # Only continue the conversation if the prompt length is not greater than max_model_len - 1,
                 # since SGLang raises an error when max_new_tokens + 1 is greater to max_model_len (the extra
                 # token accounts for the EOS token).
@@ -862,7 +898,16 @@ class SGLangRollout(BaseRollout):
                         "video support is not implemented yet, current length of video data is %d", len(video_data)
                     )
 
+                torch.cuda.synchronize()
+                engine_call_start_time = time.time()
                 output = await self._handle_engine_call(_req, request_sampling_params, image_data=image_data)
+                torch.cuda.synchronize()
+                engine_call_end_time = time.time()
+                print(
+                    f"Time taken for engine call (turn {current_turns + 1}):"
+                    f"{engine_call_end_time - engine_call_start_time} seconds"
+                )
+
                 content = output["text"]
                 finish_reason_type = FinishReasonTypeEnum.from_str(output["meta_info"]["finish_reason"]["type"])
                 current_turns += 1
@@ -873,6 +918,8 @@ class SGLangRollout(BaseRollout):
                     if self._function_call_parser and self._function_call_parser.has_tool_call(content):
                         finish_reason_type = FinishReasonTypeEnum.TOOL_CALL
                         _req.state = AsyncRolloutRequestStateEnum.TOOL_CALLING
+                        torch.cuda.synchronize()
+                        tool_parsing_start_time = time.time()
                         try:
                             normed_content, tool_calls = self._function_call_parser.parse_non_stream(content)
                         except JSONDecodeError:
@@ -898,6 +945,10 @@ class SGLangRollout(BaseRollout):
                                     function=function,
                                 )
                             )
+                        torch.cuda.synchronize()
+                        tool_parsing_end_time = time.time()
+                        print(f"Time taken for tool parsing: {tool_parsing_end_time - tool_parsing_start_time} seconds")
+
                         if len(parsed_tool_calls) > 0:
                             _req.add_assistant_message(
                                 self.processing_class, normed_content, tool_calls=parsed_tool_calls
@@ -921,7 +972,15 @@ class SGLangRollout(BaseRollout):
                             _req.state = AsyncRolloutRequestStateEnum.INTERACTING
                         else:
                             break
+                torch.cuda.synchronize()
+                running_end_time = time.time()
+                print(
+                    f"Time taken for running state (turn {current_turns}):"
+                    f"{running_end_time - running_start_time} seconds"
+                )
             elif _req.state == AsyncRolloutRequestStateEnum.INTERACTING:
+                torch.cuda.synchronize()
+                interacting_start_time = time.time()
                 user_turns += 1
                 messages = [{"role": x.role, "content": x.content} for x in _req.messages]
 
@@ -936,9 +995,18 @@ class SGLangRollout(BaseRollout):
                     )
 
                 interaction = self.interaction_map[interaction_name]
+                torch.cuda.synchronize()
+                interaction_response_start_time = time.time()
                 should_terminate_sequence, content, reward, metrics = await interaction.generate_response(
                     _req.request_id, messages, **_req.interaction_kwargs
                 )
+                torch.cuda.synchronize()
+                interaction_response_end_time = time.time()
+                print(
+                    f"Time taken for interaction response in interacting state: "
+                    f"{interaction_response_end_time - interaction_response_start_time} seconds"
+                )
+
                 user_turn_rewards.append(reward)
                 if should_terminate_sequence:
                     finish_reason_type = FinishReasonTypeEnum.STOP
@@ -951,11 +1019,26 @@ class SGLangRollout(BaseRollout):
                         break
                     else:
                         _req.state = AsyncRolloutRequestStateEnum.RUNNING
+                torch.cuda.synchronize()
+                interacting_end_time = time.time()
+                print(
+                    f"Time taken for interacting state in _async_rollout_a_request: "
+                    f"{interacting_end_time - interacting_start_time} seconds"
+                )
+
+        torch.cuda.synchronize()
+        main_loop_end_time = time.time()
+        print(
+            f"Time taken for main loop in _async_rollout_a_request: {main_loop_end_time - main_loop_start_time} seconds"
+        )
 
         if current_turns >= self.config.multi_turn.max_assistant_turns:
             finish_reason_type = FinishReasonTypeEnum.STOP
 
         # Calculate the reward for each tool
+        torch.cuda.synchronize()
+        reward_calculation_start_time = time.time()
+
         async def calc_reward_and_release_fn(name: str, tool: BaseTool):
             reward = await tool.calc_reward(_req.request_id, **_req.tools_kwargs[name].get("calc_reward_kwargs", {}))
             await tool.release(_req.request_id, **_req.tools_kwargs[name].get("release_kwargs", {}))
@@ -968,7 +1051,22 @@ class SGLangRollout(BaseRollout):
         tool_reward_scores = await asyncio.gather(*tool_reward_tasks)
         tool_reward_scores = dict(tool_reward_scores)
         all_rewards = {**tool_reward_scores, **{"user_turn_rewards": user_turn_rewards}}
+        torch.cuda.synchronize()
+        reward_calculation_end_time = time.time()
+        print(
+            f"Time taken for reward calculation in _async_rollout_a_request: "
+            f"{reward_calculation_end_time - reward_calculation_start_time} seconds"
+        )
+
+        torch.cuda.synchronize()
+        finalization_start_time = time.time()
         _req.finalize(self.processing_class, all_rewards, finish_reason_type)
+        torch.cuda.synchronize()
+        finalization_end_time = time.time()
+        print(
+            f"Time taken for finalization in _async_rollout_a_request: "
+            f"{finalization_end_time - finalization_start_time} seconds"
+        )
 
         return _req
 
@@ -981,27 +1079,56 @@ class SGLangRollout(BaseRollout):
     async def _handle_engine_generate(
         self, generation_prompt_ids: list[int], sampling_params: dict, image_data: Optional[list[Any]] = None
     ) -> dict:
+        torch.cuda.synchronize()
+        setup_start_time = time.time()
         max_new_tokens = min(self.config.response_length, self.config.max_model_len - len(generation_prompt_ids) - 1)
         kwargs = sampling_params.copy()
         kwargs["max_new_tokens"] = max_new_tokens
         kwargs["n"] = 1  # group size is supported in preprocess
+        torch.cuda.synchronize()
+        setup_end_time = time.time()
+        print(
+            f"Time taken for engine generate setup in _handle_engine_generate: "
+            f"{setup_end_time - setup_start_time} seconds"
+        )
+
+        torch.cuda.synchronize()
+        engine_call_start_time = time.time()
         output = await self._engine.async_generate(
             input_ids=generation_prompt_ids,
             sampling_params=kwargs,
             return_logprob=False,
             image_data=image_data,
         )
+        torch.cuda.synchronize()
+        engine_call_end_time = time.time()
+        print(
+            f"Time taken for actual engine async_generate in _handle_engine_generate: "
+            f"{engine_call_end_time - engine_call_start_time} seconds"
+        )
+
         return output
 
     async def _handle_pending_state(self, _req: AsyncRolloutRequest) -> AsyncRolloutRequest:
         if _req.tool_schemas is not None:
+            torch.cuda.synchronize()
+            tool_creation_start_time = time.time()
             tool_creation_coroutines = []
             for tool_schema in _req.tool_schemas:
                 tool = self._tool_map[tool_schema.function.name]
                 create_kwargs = _req.tools_kwargs[tool.name].get("create_kwargs", {})
                 tool_creation_coroutines.append(tool.create(_req.request_id, **create_kwargs))
             await asyncio.gather(*tool_creation_coroutines)
+            torch.cuda.synchronize()
+            tool_creation_end_time = time.time()
+            print(
+                f"Time taken for tool creation in pending state: "
+                f"{tool_creation_end_time - tool_creation_start_time} seconds"
+            )
+
         if _req.interaction_kwargs and self.interaction_map:
+            torch.cuda.synchronize()
+            interaction_start_time = time.time()
             interaction_kwargs = _req.interaction_kwargs
             # Get interaction by name from interaction_kwargs
             interaction_name = interaction_kwargs.get("name", "gsm8k")  # Default to gsm8k for backward compatibility
@@ -1013,6 +1140,12 @@ class SGLangRollout(BaseRollout):
 
             interaction = self.interaction_map[interaction_name]
             await interaction.start_interaction(_req.request_id, **interaction_kwargs)
+            torch.cuda.synchronize()
+            interaction_end_time = time.time()
+            print(
+                f"Time taken for interaction start in pending state: "
+                f"{interaction_end_time - interaction_start_time} seconds"
+            )
 
     @GPUMemoryLogger(role="sglang rollout", logger=logger)
     @torch.no_grad()
@@ -1034,24 +1167,61 @@ class SGLangRollout(BaseRollout):
         Thus we do not need to repeat the prompts here and set the sampling parameter n to 1.
         """
         # Async rollout with tools support
+        torch.cuda.synchronize()
+        start_time = time.time()
         do_sample = prompts.meta_info.get("do_sample", True)
         is_validate = prompts.meta_info.get("validate", False)
         tgt_device = prompts.batch["input_ids"].device
+
         if self._tp_rank == 0:
+            torch.cuda.synchronize()
+            preprocess_start_time = time.time()
             req_list = self._preprocess_prompt_to_async_rollout_requests(
                 prompts,
             )
+            torch.cuda.synchronize()
+            preprocess_end_time = time.time()
+            print(
+                f"Time taken for preprocessing in _req_level_generate_sequences: "
+                f"{preprocess_end_time - preprocess_start_time} seconds"
+            )
+
+            torch.cuda.synchronize()
+            async_generate_start_time = time.time()
             loop = asyncio.get_event_loop()
             output_req_list = loop.run_until_complete(
                 asyncio.gather(
                     *[self._async_rollout_a_request(req, do_sample, is_validate, **kwargs) for req in req_list],
                 )
             )
+            torch.cuda.synchronize()
+            async_generate_end_time = time.time()
+            print(
+                f"Time taken for async_generate in _req_level_generate_sequences: "
+                f"{async_generate_end_time - async_generate_start_time} seconds"
+            )
+
+            torch.cuda.synchronize()
+            sort_start_time = time.time()
             sorted_output_req_list = sorted(output_req_list, key=lambda x: (x.batch_data_id, x.rollout_offset))
+            torch.cuda.synchronize()
+            sort_end_time = time.time()
+            print(f"Time taken for sorting in _req_level_generate_sequences: {sort_end_time - sort_start_time} seconds")
         else:
             sorted_output_req_list = None
 
+        torch.cuda.synchronize()
+        barrier_start_time = time.time()
+        # Most naive implementation, can extract tensor and send via gloo if too slow
         dist.barrier()
+        torch.cuda.synchronize()
+        barrier_end_time = time.time()
+        print(
+            f"Time taken for barrier in _req_level_generate_sequences: {barrier_end_time - barrier_start_time} seconds"
+        )
+
+        torch.cuda.synchronize()
+        broadcast_start_time = time.time()
         [sorted_output_req_list] = broadcast_pyobj(
             data=[sorted_output_req_list],
             rank=self._rank,
@@ -1059,7 +1229,16 @@ class SGLangRollout(BaseRollout):
             src=self._device_mesh_cpu["tp"].mesh[0].item(),
             force_cpu_device=False,
         )
+        torch.cuda.synchronize()
+        broadcast_end_time = time.time()
+        print(
+            f"Time taken for broadcast in _req_level_generate_sequences: "
+            f"{broadcast_end_time - broadcast_start_time} seconds"
+        )
+
         # Construct the batch data
+        torch.cuda.synchronize()
+        postprocess_start_time = time.time()
         prompt_ids, response_ids = [], []
         prompt_attention_mask, response_attention_mask = [], []
         prompt_position_ids, response_position_ids = [], []
@@ -1107,6 +1286,15 @@ class SGLangRollout(BaseRollout):
             reward_scores.append(req.reward_scores)
             multi_modal_inputs.append(req.multi_modal_inputs)
 
+        torch.cuda.synchronize()
+        data_extraction_end_time = time.time()
+        print(
+            f"Time taken for data extraction in _req_level_generate_sequences: "
+            f"{data_extraction_end_time - postprocess_start_time} seconds"
+        )
+
+        torch.cuda.synchronize()
+        padding_start_time = time.time()
         prompt_ids = pad_sequence(
             prompt_ids,
             batch_first=True,
@@ -1171,11 +1359,27 @@ class SGLangRollout(BaseRollout):
         if response_loss_mask.shape[1] < self.config.response_length:
             response_loss_mask = pad_sequence_to_length(response_loss_mask, self.config.response_length, 0)
 
+        torch.cuda.synchronize()
+        padding_end_time = time.time()
+        print(
+            f"Time taken for padding in _req_level_generate_sequences: {padding_end_time - padding_start_time} seconds"
+        )
+
+        torch.cuda.synchronize()
+        concatenation_start_time = time.time()
         input_ids = torch.cat((prompt_ids, response_ids), dim=-1)
         attention_mask = torch.cat((prompt_attention_mask, response_attention_mask), dim=-1)
         position_ids = torch.cat((prompt_position_ids, response_position_ids), dim=-1)
+        torch.cuda.synchronize()
+        concatenation_end_time = time.time()
+        print(
+            f"Time taken for concatenation in _req_level_generate_sequences: "
+            f"{concatenation_end_time - concatenation_start_time} seconds"
+        )
 
         # Construct the batch data
+        torch.cuda.synchronize()
+        batch_construction_start_time = time.time()
         batch = TensorDict(
             {
                 "prompts": prompt_ids,
@@ -1187,13 +1391,29 @@ class SGLangRollout(BaseRollout):
             },
             batch_size=len(sorted_output_req_list),
         )
+        torch.cuda.synchronize()
+        batch_construction_end_time = time.time()
+        print(
+            f"Time taken for batch construction in _req_level_generate_sequences: "
+            f"{batch_construction_end_time - batch_construction_start_time} seconds"
+        )
 
         # free cache engine
+        torch.cuda.synchronize()
+        cache_flush_start_time = time.time()
         if self._engine is not None and self._tp_rank == 0:
             loop = asyncio.get_event_loop()
             loop.run_until_complete(self._engine.flush_cache())
+        torch.cuda.synchronize()
+        cache_flush_end_time = time.time()
+        print(
+            f"Time taken for cache flush in _req_level_generate_sequences: "
+            f"{cache_flush_end_time - cache_flush_start_time} seconds"
+        )
 
-        return DataProto(
+        torch.cuda.synchronize()
+        final_construction_start_time = time.time()
+        result = DataProto(
             batch=batch,
             non_tensor_batch={
                 "messages": np.array(messages),
@@ -1201,6 +1421,18 @@ class SGLangRollout(BaseRollout):
                 "multi_modal_inputs": np.array(multi_modal_inputs, dtype=object),
             },
         )
+        torch.cuda.synchronize()
+        final_construction_end_time = time.time()
+        print(
+            f"Time taken for final construction in _req_level_generate_sequences: "
+            f"{final_construction_end_time - final_construction_start_time} seconds"
+        )
+
+        torch.cuda.synchronize()
+        total_end_time = time.time()
+        print(f"Total time taken for _req_level_generate_sequences: {total_end_time - start_time} seconds")
+
+        return result
 
     def _preprocess_prompt_to_async_rollout_requests(self, prompts: DataProto, n: int = 1) -> list[AsyncRolloutRequest]:
         assert "raw_prompt" in prompts.non_tensor_batch, (
