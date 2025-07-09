@@ -72,6 +72,6 @@ I am not sure why step 70 takes a long time but just with a normal response leng
 
 ## Indetailed Log for Step 70
 
-ref to [step-70.log](./step-70.log)
+ref to [step-70.log](./step-70.txt)
 
 Here is something interesting:
