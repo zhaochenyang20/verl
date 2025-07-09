@@ -3,6 +3,29 @@
 
 set -x
 
+
+# 提前下载模型
+mkdir -p $HOME/models
+huggingface-cli download Qwen/Qwen3-4B --local-dir $HOME/models/Qwen3-4B
+
+# parse command line arguments
+TP_SIZE=""
+OTHER_ARGS=""
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --tp)
+            TP_SIZE="$2"
+            shift 2
+            ;;
+        *)
+            OTHER_ARGS="$OTHER_ARGS $1"
+            shift
+            ;;
+    esac
+done
+
+ulimit -n 65535
+
 ulimit -n 65535
 
 PROJECT_DIR="$(pwd)"
@@ -18,7 +41,7 @@ python3 -m verl.trainer.main_ppo \
     data.filter_overlong_prompts=True \
     data.truncation='error' \
     data.return_raw_chat=True \
-    actor_rollout_ref.model.path=Qwen/Qwen3-4B \
+    actor_rollout_ref.model.path=$HOME/models/Qwen3-4B \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.ppo_mini_batch_size=256 \
@@ -31,7 +54,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=32 \
-    actor_rollout_ref.rollout.tensor_model_parallel_size=2 \
+    actor_rollout_ref.rollout.tensor_model_parallel_size=${TP_SIZE} \
     actor_rollout_ref.rollout.name=sglang \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.5 \
     actor_rollout_ref.rollout.n=16 \
@@ -40,8 +63,8 @@ python3 -m verl.trainer.main_ppo \
     algorithm.use_kl_in_reward=False \
     trainer.critic_warmup=0 \
     trainer.logger=['console','wandb'] \
-    trainer.project_name='gsm8k_async_rl' \
-    trainer.experiment_name='qwen3-4b_function_rm-gsm8k-sgl-multi-w-tool-verify-n16' \
+    trainer.project_name='verl-profile-sglang-qwen3' \
+    trainer.experiment_name="qwen3-4b-multiturn-tp-${TP_SIZE}" \
     trainer.n_gpus_per_node=8 \
     trainer.nnodes=1 \
     trainer.save_freq=-1 \
@@ -49,5 +72,6 @@ python3 -m verl.trainer.main_ppo \
     data.train_files=$HOME/data/gsm8k/train.parquet \
     data.val_files=$HOME/data/gsm8k/test.parquet \
     actor_rollout_ref.rollout.multi_turn.tool_config_path="$PROJECT_DIR/examples/sglang_multiturn/config/tool_config/gsm8k_tool_config.yaml" \
-    trainer.total_epochs=15 $@
+    trainer.total_epochs=15 \
+    $OTHER_ARGS
 
