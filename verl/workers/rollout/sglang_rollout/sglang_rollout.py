@@ -879,7 +879,10 @@ class SGLangRollout(BaseRollout):
         current_turns = 0
         user_turns = 0
         user_turn_rewards = []
-
+        
+        # Turn-level timing tracking
+        turn_timings = []
+        
         # request级别完整时间记录
         torch.cuda.synchronize()
         request_start_time = time.time()
@@ -973,7 +976,7 @@ class SGLangRollout(BaseRollout):
                         log_path,
                         event="tool_execution",
                         duration=tool_execution_end_time - tool_execution_start_time,
-                        extra={"request_id": _req.request_id},
+                        extra={"request_id": _req.request_id, "turn": current_turns},
                         workid=self._rank,
                         step=self.step
                     )
@@ -988,7 +991,7 @@ class SGLangRollout(BaseRollout):
                         log_path,
                         event="tool_response_processing",
                         duration=tool_response_end_time - tool_response_start_time,
-                        extra={"request_id": _req.request_id},
+                        extra={"request_id": _req.request_id, "turn": current_turns},
                         workid=self._rank,
                         step=self.step
                     )
@@ -1004,13 +1007,30 @@ class SGLangRollout(BaseRollout):
                     log_path,
                     event="tool_calling_state",
                     duration=tool_calling_end_time - tool_calling_start_time,
-                    extra={"request_id": _req.request_id},
+                    extra={"request_id": _req.request_id, "turn": current_turns},
                     workid=self._rank,
                     step=self.step
                 )
             elif _req.state == AsyncRolloutRequestStateEnum.RUNNING:
+                # === TURN START ===
                 torch.cuda.synchronize()
-                running_start_time = time.time()
+                turn_start_time = time.time()
+                self.log_manager.log(
+                    log_path,
+                    event="turn_start",
+                    extra={
+                        "request_id": _req.request_id,
+                        "turn": current_turns,
+                        "current_sequence_length": len(_req.get_generation_prompt_ids(self.processing_class))
+                    },
+                    workid=self._rank,
+                    step=self.step
+                )
+                
+                # === TURN PRE-PROCESS ===
+                torch.cuda.synchronize()
+                turn_pre_process_start_time = time.time()
+                
                 # Only continue the conversation if the prompt length is not greater than max_model_len - 1,
                 # since SGLang raises an error when max_new_tokens + 1 is greater to max_model_len (the extra
                 # token accounts for the EOS token).
@@ -1033,29 +1053,61 @@ class SGLangRollout(BaseRollout):
                     logger.warning(
                         "video support is not implemented yet, current length of video data is %d", len(video_data)
                     )
-
+                
                 torch.cuda.synchronize()
-                engine_call_start_time = time.time()
-                output = await self._handle_engine_call(_req, request_sampling_params, image_data=image_data)
-                torch.cuda.synchronize()
-                engine_call_end_time = time.time()
+                turn_pre_process_end_time = time.time()
+                turn_pre_process_duration = turn_pre_process_end_time - turn_pre_process_start_time
                 self.log_manager.log(
                     log_path,
-                    event="engine_call",
-                    duration=engine_call_end_time - engine_call_start_time,
-                    extra={"turn": current_turns + 1, "request_id": _req.request_id},
+                    event="turn_pre_process",
+                    duration=turn_pre_process_duration,
+                    extra={
+                        "request_id": _req.request_id,
+                        "turn": current_turns,
+                        "generation_prompt_length": len(_req.get_generation_prompt_ids(self.processing_class))
+                    },
                     workid=self._rank,
                     step=self.step
                 )
 
+                # === TURN ENGINE CALL ===
+                torch.cuda.synchronize()
+                turn_engine_call_start_time = time.time()
+                output = await self._handle_engine_call(_req, request_sampling_params, image_data=image_data)
+                torch.cuda.synchronize()
+                turn_engine_call_end_time = time.time()
+                turn_engine_call_duration = turn_engine_call_end_time - turn_engine_call_start_time
+                self.log_manager.log(
+                    log_path,
+                    event="turn_engine_call",
+                    duration=turn_engine_call_duration,
+                    extra={
+                        "request_id": _req.request_id,
+                        "turn": current_turns,
+                        "generated_tokens": len(output.get("output_ids", [])) if output else 0,
+                        "output_text_length": len(output.get("text", "")) if output else 0
+                    },
+                    workid=self._rank,
+                    step=self.step
+                )
+
+                # === TURN POST-PROCESS ===
+                torch.cuda.synchronize()
+                turn_post_process_start_time = time.time()
+                
                 content = output["text"]
                 finish_reason_type = FinishReasonTypeEnum.from_str(output["meta_info"]["finish_reason"]["type"])
-                current_turns += 1
+                
+                # Initialize tool parsing timing
+                tool_parsing_duration = 0
+                has_tool_calls = False
+                parsed_tool_calls_count = 0
+                
                 if finish_reason_type == FinishReasonTypeEnum.LENGTH:
                     _req.add_assistant_message(self.processing_class, content)
-                    break
                 else:
                     if self._function_call_parser and self._function_call_parser.has_tool_call(content):
+                        has_tool_calls = True
                         finish_reason_type = FinishReasonTypeEnum.TOOL_CALL
                         _req.state = AsyncRolloutRequestStateEnum.TOOL_CALLING
                         torch.cuda.synchronize()
@@ -1085,13 +1137,20 @@ class SGLangRollout(BaseRollout):
                                     function=function,
                                 )
                             )
+                        parsed_tool_calls_count = len(parsed_tool_calls)
                         torch.cuda.synchronize()
                         tool_parsing_end_time = time.time()
+                        tool_parsing_duration = tool_parsing_end_time - tool_parsing_start_time
                         self.log_manager.log(
                             log_path,
-                            event="tool_parsing",
-                            duration=tool_parsing_end_time - tool_parsing_start_time,
-                            extra={"request_id": _req.request_id},
+                            event="turn_tool_parsing",
+                            duration=tool_parsing_duration,
+                            extra={
+                                "request_id": _req.request_id,
+                                "turn": current_turns,
+                                "raw_tool_calls": len(tool_calls),
+                                "parsed_tool_calls": parsed_tool_calls_count
+                            },
                             workid=self._rank,
                             step=self.step
                         )
@@ -1104,7 +1163,6 @@ class SGLangRollout(BaseRollout):
                             _req.add_assistant_message(self.processing_class, content)
                             finish_reason_type = FinishReasonTypeEnum.STOP
                             _req.state = AsyncRolloutRequestStateEnum.COMPLETED
-                            break
                     else:
                         _req.add_assistant_message(
                             self.processing_class,
@@ -1118,17 +1176,72 @@ class SGLangRollout(BaseRollout):
                         ):
                             _req.state = AsyncRolloutRequestStateEnum.INTERACTING
                         else:
-                            break
+                            _req.state = AsyncRolloutRequestStateEnum.COMPLETED
+
                 torch.cuda.synchronize()
-                running_end_time = time.time()
+                turn_post_process_end_time = time.time()
+                turn_post_process_duration = turn_post_process_end_time - turn_post_process_start_time
                 self.log_manager.log(
                     log_path,
-                    event="running_state",
-                    duration=running_end_time - running_start_time,
-                    extra={"turn": current_turns, "request_id": _req.request_id},
+                    event="turn_post_process",
+                    duration=turn_post_process_duration,
+                    extra={
+                        "request_id": _req.request_id,
+                        "turn": current_turns,
+                        "has_tool_calls": has_tool_calls,
+                        "parsed_tool_calls": parsed_tool_calls_count,
+                        "finish_reason": str(finish_reason_type),
+                        "tool_parsing_duration": tool_parsing_duration
+                    },
                     workid=self._rank,
                     step=self.step
                 )
+
+                # === TURN END ===
+                current_turns += 1
+                torch.cuda.synchronize()
+                turn_end_time = time.time()
+                turn_total_duration = turn_end_time - turn_start_time
+                
+                # Record turn timing details
+                turn_timing = {
+                    "turn": current_turns - 1,
+                    "total_duration": turn_total_duration,
+                    "pre_process_duration": turn_pre_process_duration,
+                    "engine_call_duration": turn_engine_call_duration,
+                    "post_process_duration": turn_post_process_duration,
+                    "tool_parsing_duration": tool_parsing_duration,
+                    "has_tool_calls": has_tool_calls,
+                    "finish_reason": str(finish_reason_type)
+                }
+                turn_timings.append(turn_timing)
+                
+                self.log_manager.log(
+                    log_path,
+                    event="turn_end",
+                    duration=turn_total_duration,
+                    extra={
+                        "request_id": _req.request_id,
+                        "turn": current_turns - 1,
+                        "pre_process_duration": turn_pre_process_duration,
+                        "engine_call_duration": turn_engine_call_duration,
+                        "post_process_duration": turn_post_process_duration,
+                        "tool_parsing_duration": tool_parsing_duration,
+                        "has_tool_calls": has_tool_calls,
+                        "finish_reason": str(finish_reason_type),
+                        "engine_call_pct": round(turn_engine_call_duration / turn_total_duration * 100, 2),
+                        "post_process_pct": round(turn_post_process_duration / turn_total_duration * 100, 2)
+                    },
+                    workid=self._rank,
+                    step=self.step
+                )
+                
+                # Break conditions
+                if finish_reason_type == FinishReasonTypeEnum.LENGTH:
+                    break
+                if _req.state == AsyncRolloutRequestStateEnum.COMPLETED:
+                    break
+                    
             elif _req.state == AsyncRolloutRequestStateEnum.INTERACTING:
                 torch.cuda.synchronize()
                 interacting_start_time = time.time()
@@ -1157,7 +1270,11 @@ class SGLangRollout(BaseRollout):
                     log_path,
                     event="interaction_response",
                     duration=interaction_response_end_time - interaction_response_start_time,
-                    extra={"request_id": _req.request_id},
+                    extra={
+                        "request_id": _req.request_id,
+                        "user_turn": user_turns,
+                        "assistant_turn": current_turns
+                    },
                     workid=self._rank,
                     step=self.step
                 )
@@ -1180,7 +1297,11 @@ class SGLangRollout(BaseRollout):
                     log_path,
                     event="interacting_state",
                     duration=interacting_end_time - interacting_start_time,
-                    extra={"request_id": _req.request_id},
+                    extra={
+                        "request_id": _req.request_id,
+                        "user_turn": user_turns,
+                        "assistant_turn": current_turns
+                    },
                     workid=self._rank,
                     step=self.step
                 )
@@ -1249,6 +1370,22 @@ class SGLangRollout(BaseRollout):
         response_length = len(_req.response_ids.squeeze(0)) if _req.response_ids is not None else 0
         actual_response_tokens = torch.sum(_req.response_loss_mask.squeeze(0)).item() if _req.response_loss_mask is not None else 0
 
+        # Calculate turn statistics
+        if turn_timings:
+            avg_turn_duration = np.mean([t["total_duration"] for t in turn_timings])
+            avg_engine_call_duration = np.mean([t["engine_call_duration"] for t in turn_timings])
+            avg_post_process_duration = np.mean([t["post_process_duration"] for t in turn_timings])
+            total_engine_time = sum([t["engine_call_duration"] for t in turn_timings])
+            total_post_process_time = sum([t["post_process_duration"] for t in turn_timings])
+            turns_with_tools = sum([1 for t in turn_timings if t["has_tool_calls"]])
+        else:
+            avg_turn_duration = 0
+            avg_engine_call_duration = 0
+            avg_post_process_duration = 0
+            total_engine_time = 0
+            total_post_process_time = 0
+            turns_with_tools = 0
+
         self.log_manager.log(
             log_path,
             event="async_rollout_request_complete",
@@ -1258,9 +1395,19 @@ class SGLangRollout(BaseRollout):
                 "batch_data_id": _req.batch_data_id,
                 "finish_reason": str(finish_reason_type),
                 "turns": current_turns,
+                "user_turns": user_turns,
+                "turns_with_tools": turns_with_tools,
                 "response_length": response_length,
                 "actual_response_tokens": actual_response_tokens,
-                "total_sequence_length": len(_req.input_ids.squeeze(0)) if _req.input_ids is not None else 0
+                "total_sequence_length": len(_req.input_ids.squeeze(0)) if _req.input_ids is not None else 0,
+                "avg_turn_duration": round(avg_turn_duration, 4),
+                "avg_engine_call_duration": round(avg_engine_call_duration, 4),
+                "avg_post_process_duration": round(avg_post_process_duration, 4),
+                "total_engine_time": round(total_engine_time, 4),
+                "total_post_process_time": round(total_post_process_time, 4),
+                "engine_time_pct": round(total_engine_time / total_request_time * 100, 2) if total_request_time > 0 else 0,
+                "post_process_time_pct": round(total_post_process_time / total_request_time * 100, 2) if total_request_time > 0 else 0,
+                "turn_timings": turn_timings
             },
             workid=self._rank,
             step=self.step
