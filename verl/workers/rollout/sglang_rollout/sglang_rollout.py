@@ -1371,7 +1371,7 @@ class SGLangRollout(BaseRollout):
             preprocess_end_time = time.time()
             self.log_manager.log(
                 log_path,
-                event="preprocessing",
+                event="preprocessing_duration",
                 duration=preprocess_end_time - preprocess_start_time,
                 workid=self._rank,
                 step=self.step
@@ -1389,7 +1389,7 @@ class SGLangRollout(BaseRollout):
             async_generate_end_time = time.time()
             self.log_manager.log(
                 log_path,
-                event="async_generate",
+                event="async_generate_duration",
                 duration=async_generate_end_time - async_generate_start_time,
                 workid=self._rank,
                 step=self.step
@@ -1402,7 +1402,7 @@ class SGLangRollout(BaseRollout):
             sort_end_time = time.time()
             self.log_manager.log(
                 log_path,
-                event="sorting",
+                event="sorting_duration",
                 duration=sort_end_time - sort_start_time,
                 workid=self._rank,
                 step=self.step
@@ -1418,7 +1418,7 @@ class SGLangRollout(BaseRollout):
         if self._tp_rank == 0:
             self.log_manager.log(
                 log_path,
-                event="barrier",
+                event="barrier_wait_duration",
                 duration=barrier_end_time - barrier_start_time,
                 workid=self._rank,
                 step=self.step
@@ -1438,7 +1438,7 @@ class SGLangRollout(BaseRollout):
         if self._tp_rank == 0:
             self.log_manager.log(
                 log_path,
-                event="broadcast",
+                event="broadcast_duration",
                 duration=broadcast_end_time - broadcast_start_time,
                 workid=self._rank,
                 step=self.step
@@ -1498,7 +1498,7 @@ class SGLangRollout(BaseRollout):
         if self._tp_rank == 0:
             self.log_manager.log(
                 log_path,
-                event="data_extraction",
+                event="data_extraction_duration",
                 duration=data_extraction_end_time - postprocess_start_time,
                 workid=self._rank,
                 step=self.step
@@ -1575,7 +1575,7 @@ class SGLangRollout(BaseRollout):
         if self._tp_rank == 0:
             self.log_manager.log(
                 log_path,
-                event="padding",
+                event="padding_duration",
                 duration=padding_end_time - padding_start_time,
                 workid=self._rank,
                 step=self.step
@@ -1591,7 +1591,7 @@ class SGLangRollout(BaseRollout):
         if self._tp_rank == 0:
             self.log_manager.log(
                 log_path,
-                event="concatenation",
+                event="concatenation_duration",
                 duration=concatenation_end_time - concatenation_start_time,
                 workid=self._rank,
                 step=self.step
@@ -1616,7 +1616,7 @@ class SGLangRollout(BaseRollout):
         if self._tp_rank == 0:
             self.log_manager.log(
                 log_path,
-                event="batch_construction",
+                event="batch_construction_duration",
                 duration=batch_construction_end_time - batch_construction_start_time,
                 workid=self._rank,
                 step=self.step
@@ -1633,7 +1633,7 @@ class SGLangRollout(BaseRollout):
         if self._tp_rank == 0:
             self.log_manager.log(
                 log_path,
-                event="cache_flush",
+                event="cache_flush_duration",
                 duration=cache_flush_end_time - cache_flush_start_time,
                 workid=self._rank,
                 step=self.step
@@ -1654,7 +1654,7 @@ class SGLangRollout(BaseRollout):
         if self._tp_rank == 0:
             self.log_manager.log(
                 log_path,
-                event="final_construction",
+                event="final_construction_duration",
                 duration=final_construction_end_time - final_construction_start_time,
                 workid=self._rank,
                 step=self.step
@@ -1665,7 +1665,7 @@ class SGLangRollout(BaseRollout):
         if self._tp_rank == 0:
             self.log_manager.log(
                 log_path,
-                event="total",
+                event="total_step_duration",
                 duration=total_end_time - start_time,
                 workid=self._rank,
                 step=self.step
