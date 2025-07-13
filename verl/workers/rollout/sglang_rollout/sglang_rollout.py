@@ -101,7 +101,7 @@ class SGLangLogManager:
             self.file_handles[log_path] = open(log_path, 'a', buffering=1)
         return self.file_handles[log_path]
     
-    def log(self, log_path, event, duration=None, extra=None, workid=None, step=None):
+    def log(self, log_path, event, duration=None, extra=None, workid=None, step=None,**extra_keys):
         handle = self.get_handle(log_path)
         log_entry = {
             "timestamp": datetime.now().isoformat(),
@@ -111,13 +111,14 @@ class SGLangLogManager:
             log_entry["duration_sec"] = duration
         if extra is not None:
             log_entry["extra"] = extra
-        # 保证 workid 和 step 在最后
         if workid is not None:
             log_entry["workid"] = workid
         if step is not None:
             log_entry["step"] = step
-        # 重新排序，保证 workid 和 step 在最后
-        ordered_keys = [k for k in log_entry.keys() if k not in ("workid", "step")] + ["workid", "step"]
+        if extra_keys is not None:
+            for key in extra_keys:
+                log_entry[key] = extra_keys[key]
+        ordered_keys = ["timestamp", "event", "duration_sec"] + [k for k in log_entry.keys() if k not in ("timestamp", "event", "duration_sec")]
         ordered_entry = {k: log_entry[k] for k in ordered_keys if k in log_entry}
         handle.write(json.dumps(ordered_entry) + '\n')
         handle.flush()
@@ -327,7 +328,7 @@ class SGLangRollout(BaseRollout):
         self._device_mesh_cpu = device_mesh
         os.environ.setdefault("SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK", "true")
         self.log_manager = SGLangLogManager()
-        self.log_dir = "multiturn_log_dir"
+        self.log_dir = os.getenv("EXPERIMENT_NAME", "multiturn_log_dir")
         self._rank = None  # will be set in _init_distributed_env
 
         (
@@ -888,6 +889,17 @@ class SGLangRollout(BaseRollout):
             f"worker_{self._rank}.jsonl"
         )
 
+        self.log_manager.log(
+            log_path,
+            event="request_start",
+            extra={
+                "request_id": req.request_id,
+                "initial_prompt_length": len(req.get_generation_prompt_ids(self.processing_class))
+            },
+            workid=self._rank,
+            step=self.step
+        )
+
         # Create request-level sampling parameters
         request_sampling_params = self.sampling_params.copy()
         if not do_sample:
@@ -934,6 +946,7 @@ class SGLangRollout(BaseRollout):
                     log_path,
                     event="pending_state_handling",
                     duration=pending_end_time - pending_start_time,
+                    extra={"request_id": _req.request_id},
                     workid=self._rank,
                     step=self.step
                 )
@@ -960,6 +973,7 @@ class SGLangRollout(BaseRollout):
                         log_path,
                         event="tool_execution",
                         duration=tool_execution_end_time - tool_execution_start_time,
+                        extra={"request_id": _req.request_id},
                         workid=self._rank,
                         step=self.step
                     )
@@ -974,6 +988,7 @@ class SGLangRollout(BaseRollout):
                         log_path,
                         event="tool_response_processing",
                         duration=tool_response_end_time - tool_response_start_time,
+                        extra={"request_id": _req.request_id},
                         workid=self._rank,
                         step=self.step
                     )
@@ -989,6 +1004,7 @@ class SGLangRollout(BaseRollout):
                     log_path,
                     event="tool_calling_state",
                     duration=tool_calling_end_time - tool_calling_start_time,
+                    extra={"request_id": _req.request_id},
                     workid=self._rank,
                     step=self.step
                 )
@@ -1027,7 +1043,7 @@ class SGLangRollout(BaseRollout):
                     log_path,
                     event="engine_call",
                     duration=engine_call_end_time - engine_call_start_time,
-                    extra={"turn": current_turns + 1},
+                    extra={"turn": current_turns + 1, "request_id": _req.request_id},
                     workid=self._rank,
                     step=self.step
                 )
@@ -1075,6 +1091,7 @@ class SGLangRollout(BaseRollout):
                             log_path,
                             event="tool_parsing",
                             duration=tool_parsing_end_time - tool_parsing_start_time,
+                            extra={"request_id": _req.request_id},
                             workid=self._rank,
                             step=self.step
                         )
@@ -1108,7 +1125,7 @@ class SGLangRollout(BaseRollout):
                     log_path,
                     event="running_state",
                     duration=running_end_time - running_start_time,
-                    extra={"turn": current_turns},
+                    extra={"turn": current_turns, "request_id": _req.request_id},
                     workid=self._rank,
                     step=self.step
                 )
@@ -1140,6 +1157,7 @@ class SGLangRollout(BaseRollout):
                     log_path,
                     event="interaction_response",
                     duration=interaction_response_end_time - interaction_response_start_time,
+                    extra={"request_id": _req.request_id},
                     workid=self._rank,
                     step=self.step
                 )
@@ -1162,16 +1180,19 @@ class SGLangRollout(BaseRollout):
                     log_path,
                     event="interacting_state",
                     duration=interacting_end_time - interacting_start_time,
+                    extra={"request_id": _req.request_id},
                     workid=self._rank,
                     step=self.step
                 )
 
         torch.cuda.synchronize()
         main_loop_end_time = time.time()
+
         self.log_manager.log(
             log_path,
             event="main_loop",
             duration=main_loop_end_time - main_loop_start_time,
+            extra={"request_id": _req.request_id},
             workid=self._rank,
             step=self.step
         )
@@ -1201,6 +1222,7 @@ class SGLangRollout(BaseRollout):
             log_path,
             event="reward_calculation",
             duration=reward_calculation_end_time - reward_calculation_start_time,
+            extra={"request_id": _req.request_id},
             workid=self._rank,
             step=self.step
         )
@@ -1215,6 +1237,7 @@ class SGLangRollout(BaseRollout):
                 log_path,
                 event="finalization",
                 duration=finalization_end_time - finalization_start_time,
+                extra={"request_id": _req.request_id},
                 workid=self._rank,
                 step=self.step
             )
@@ -1222,30 +1245,37 @@ class SGLangRollout(BaseRollout):
         torch.cuda.synchronize()
         request_end_time = time.time()
         total_request_time = request_end_time - request_start_time
-        if self._tp_rank == 0:
-            self.log_manager.log(
-                log_path,
-                event="async_rollout_request_complete",
-                duration=total_request_time,
-                extra={
-                    "request_id": _req.request_id,
-                    "batch_data_id": getattr(_req, "batch_data_id", None),
-                    "finish_reason": str(finish_reason_type),
-                    "turns": current_turns
-                },
-                workid=self._rank,
-                step=self.step
-            )
+
+        response_length = len(_req.response_ids.squeeze(0)) if _req.response_ids is not None else 0
+        actual_response_tokens = torch.sum(_req.response_loss_mask.squeeze(0)).item() if _req.response_loss_mask is not None else 0
+
+        self.log_manager.log(
+            log_path,
+            event="async_rollout_request_complete",
+            duration=total_request_time,
+            extra={
+                "request_id": _req.request_id,
+                "batch_data_id": _req.batch_data_id,
+                "finish_reason": str(finish_reason_type),
+                "turns": current_turns,
+                "response_length": response_length,
+                "actual_response_tokens": actual_response_tokens,
+                "total_sequence_length": len(_req.input_ids.squeeze(0)) if _req.input_ids is not None else 0
+            },
+            workid=self._rank,
+            step=self.step
+        )
+
         return _req
 
     async def _handle_engine_call(
         self, _req: AsyncRolloutRequest, sampling_params: dict, image_data: Optional[list[Any]] = None
     ) -> dict:
         generation_prompt_ids = _req.get_generation_prompt_ids(self.processing_class)
-        return await self._handle_engine_generate(generation_prompt_ids, sampling_params, image_data)
+        return await self._handle_engine_generate(generation_prompt_ids, sampling_params, image_data, _req.request_id)
 
     async def _handle_engine_generate(
-        self, generation_prompt_ids: list[int], sampling_params: dict, image_data: Optional[list[Any]] = None
+        self, generation_prompt_ids: list[int], sampling_params: dict, image_data: Optional[list[Any]] = None, request_id: Optional[str] = None
     ) -> dict:
         torch.cuda.synchronize()
         setup_start_time = time.time()
@@ -1264,6 +1294,7 @@ class SGLangRollout(BaseRollout):
             log_path,
             event="engine_generate_setup",
             duration=setup_end_time - setup_start_time,
+            extra={"request_id": request_id} if request_id else None,
             workid=self._rank,
             step=self.step
         )
@@ -1281,6 +1312,7 @@ class SGLangRollout(BaseRollout):
             log_path,
             event="engine_async_generate_actual",
             duration=engine_call_end_time - engine_call_start_time,
+            extra={"request_id": request_id} if request_id else None,
             workid=self._rank,
             step=self.step
         )
@@ -1307,6 +1339,7 @@ class SGLangRollout(BaseRollout):
                 log_path,
                 event="tool_creation_pending_state",
                 duration=tool_creation_end_time - tool_creation_start_time,
+                extra={"request_id": _req.request_id},
                 workid=self._rank,
                 step=self.step
             )
@@ -1328,6 +1361,7 @@ class SGLangRollout(BaseRollout):
                 log_path,
                 event="interaction_start_pending_state",
                 duration=interaction_end_time - interaction_start_time,
+                extra={"request_id": _req.request_id},
                 workid=self._rank,
                 step=self.step
             )
@@ -1662,6 +1696,30 @@ class SGLangRollout(BaseRollout):
 
         torch.cuda.synchronize()
         total_end_time = time.time()
+        if self._tp_rank == 0:
+            all_response_lengths = [len(req.response_ids.squeeze(0)) for req in sorted_output_req_list if req.response_ids is not None]
+            all_actual_response_tokens = [torch.sum(req.response_loss_mask.squeeze(0)).item() for req in sorted_output_req_list if req.response_loss_mask is not None]
+    
+        
+            self.log_manager.log(
+                log_path,
+                event="step_response_length_stats",
+                extra={
+                    "response_lengths": all_response_lengths,
+                    "actual_response_tokens": all_actual_response_tokens,
+                    "response_length_mean": np.mean(all_response_lengths),
+                    "response_length_median": np.median(all_response_lengths),
+                    "response_length_p80": np.percentile(all_response_lengths, 80),
+                    "response_length_p95": np.percentile(all_response_lengths, 95),
+                    "response_length_max": max(all_response_lengths),
+                    "response_length_min": min(all_response_lengths),
+                    "requests_over_500": sum(1 for x in all_response_lengths if x > 500),
+                    "requests_over_1000": sum(1 for x in all_response_lengths if x > 1000),
+                    "batch_size": len(sorted_output_req_list)
+                },
+                workid=self._rank,
+                step=self.step
+            )
         if self._tp_rank == 0:
             self.log_manager.log(
                 log_path,
