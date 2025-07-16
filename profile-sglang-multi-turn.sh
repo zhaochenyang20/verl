@@ -44,7 +44,12 @@ echo "TIMESTAMP: ${TIMESTAMP}"
 
 source ~/.python/veRL-multiturn-rollout/bin/activate
 
-COMMAND="nohup bash examples/sglang_multiturn/run_qwen2.5-3b_gsm8k_multiturn.sh trainer.experiment_name=multiturn-tp-${TP_SIZE}-${TIMESTAMP} --tp ${TP_SIZE} >> logs/gsm8k-multiturn-tp-${TP_SIZE}-${TIMESTAMP}.log 2>&1 &"
+EXPERIMENT_NAME=multiturn-tp-${TP_SIZE}-${TIMESTAMP}
+
+export WANDB_API_KEY="YOUR_WANDB_API_KEY"
+
+# to change the parameters, modify run_qwen2.5-3b_gsm8k_multiturn.sh
+COMMAND="nohup env EXPERIMENT_NAME=${EXPERIMENT_NAME} bash examples/sglang_multiturn/run_qwen2.5-3b_gsm8k_multiturn.sh trainer.experiment_name=multiturn-tp-${TP_SIZE}-${TIMESTAMP} --tp ${TP_SIZE} >> logs/gsm8k-multiturn-tp-${TP_SIZE}-${TIMESTAMP}.log 2>&1 &"
 
 run_command() {
     echo "Running command: $1"
@@ -56,3 +61,4 @@ run_command "${COMMAND}"
 alias kill="pkill -f sglang"
 
 alias tf="tail -f"
+

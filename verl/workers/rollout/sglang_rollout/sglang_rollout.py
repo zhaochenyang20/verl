@@ -89,7 +89,7 @@ logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
 
-
+# logging tool for sglang multi-turn rollout
 class SGLangLogManager:
     def __init__(self):
         self.file_handles = {}
@@ -328,8 +328,8 @@ class SGLangRollout(BaseRollout):
         self._device_mesh_cpu = device_mesh
         os.environ.setdefault("SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK", "true")
         self.log_manager = SGLangLogManager()
-        self.log_dir = os.getenv("EXPERIMENT_NAME", "multiturn_log_dir")
-        self._rank = None  # will be set in _init_distributed_env
+        self.log_dir = "logs/"+os.getenv("EXPERIMENT_NAME", "multiturn_log_dir")
+        self._rank = None  # wsill be set in _init_distributed_env
 
         (
             self._tool_schemas,
