@@ -1430,7 +1430,7 @@ class SGLangRollout(BaseRollout):
         )
 
         # 计算真实的reward_scores，即使response是padding的
-        reward_scores = await self._calculate_reward_scores_for_partial_request_async(original_req)
+        reward_scores = await self._calculate_tool_rewards_async(original_req, user_turn_rewards=[])
 
         # 创建新的请求，保持原始结构但使用padding数据
         padding_req = AsyncRolloutRequest(
@@ -1518,12 +1518,6 @@ class SGLangRollout(BaseRollout):
 
         return reward_scores
 
-    async def _calculate_reward_scores_for_partial_request_async(
-        self, original_req: AsyncRolloutRequest
-    ) -> dict[str, float]:
-        """为部分请求异步计算reward_scores"""
-        return await self._calculate_tool_rewards_async(original_req, user_turn_rewards=[])
-
     async def _create_padding_request_async(self, original_req: AsyncRolloutRequest) -> AsyncRolloutRequest:
         """
         Asynchronously creates a padding request to replace an aborted or failed request,
@@ -1585,7 +1579,7 @@ class SGLangRollout(BaseRollout):
         if original_req.position_ids is not None and original_req.position_ids.dim() == 2:
             response_position_ids = response_position_ids.repeat(original_req.position_ids.shape[0], 1)
 
-        reward_scores = await self._calculate_reward_scores_for_partial_request_async(original_req)
+        reward_scores = await self._calculate_tool_rewards_async(original_req, user_turn_rewards=[])
 
         request_id_suffix = "partial_normal_mask" if use_normal_loss_mask else "partial_zero_mask"
         partial_req = AsyncRolloutRequest(
