@@ -1005,18 +1005,7 @@ class SGLangRollout(BaseRollout):
             finish_reason_type = FinishReasonTypeEnum.STOP
 
         # Calculate the reward for each tool
-        async def calc_reward_and_release_fn(name: str, tool: BaseTool):
-            reward = await tool.calc_reward(_req.request_id, **_req.tools_kwargs[name].get("calc_reward_kwargs", {}))
-            await tool.release(_req.request_id, **_req.tools_kwargs[name].get("release_kwargs", {}))
-            return name, reward
-
-        tool_reward_tasks = []
-        for name in _req.tools_kwargs.keys():
-            tool = self._tool_map[name]
-            tool_reward_tasks.append(calc_reward_and_release_fn(name, tool))
-        tool_reward_scores = await asyncio.gather(*tool_reward_tasks)
-        tool_reward_scores = dict(tool_reward_scores)
-        all_rewards = {**tool_reward_scores, **{"user_turn_rewards": user_turn_rewards}}
+        all_rewards = await self._calculate_tool_rewards_async(_req, user_turn_rewards=user_turn_rewards)
         _req.finalize(self.processing_class, all_rewards, finish_reason_type)
         if self.config.calculate_log_probs:
             # 把input_ids输入sglang内生成一遍，并设置max_new_tokens=0，以生成log_probs
@@ -1486,16 +1475,16 @@ class SGLangRollout(BaseRollout):
         logger.info(f"Created full padding request for aborted request {original_req.request_id}")
         return padding_req
 
-    async def _calculate_reward_scores_for_partial_request_async(
-        self, original_req: AsyncRolloutRequest
+    async def _calculate_tool_rewards_async(
+        self, req: AsyncRolloutRequest, user_turn_rewards: list = None
     ) -> dict[str, float]:
-        """为部分请求异步计算reward_scores"""
+        """通用的异步工具reward计算函数"""
         reward_scores = {}
 
         # 计算工具reward
-        if original_req.tools_kwargs and self._tool_map:
+        if req.tools_kwargs and self._tool_map:
             tool_reward_tasks = []
-            for tool_name in original_req.tools_kwargs.keys():
+            for tool_name in req.tools_kwargs.keys():
                 if tool_name in self._tool_map:
                     tool = self._tool_map[tool_name]
 
@@ -1503,17 +1492,16 @@ class SGLangRollout(BaseRollout):
                     async def calc_reward_fn(name: str, tool: BaseTool):
                         try:
                             reward = await tool.calc_reward(
-                                original_req.request_id, **original_req.tools_kwargs[name].get("calc_reward_kwargs", {})
+                                req.request_id, **req.tools_kwargs[name].get("calc_reward_kwargs", {})
                             )
-                            await tool.release(
-                                original_req.request_id, **original_req.tools_kwargs[name].get("release_kwargs", {})
-                            )
+                            await tool.release(req.request_id, **req.tools_kwargs[name].get("release_kwargs", {}))
                             return name, reward
                         except Exception as e:
                             logger.warning(f"Failed to calculate reward for tool {name}: {e}")
                             return name, 0.0
 
-                    tool_reward_tasks.append(calc_reward_fn(tool_name, tool))
+                    # 使用lambda来正确捕获当前循环变量的值
+                    tool_reward_tasks.append((lambda n=tool_name, t=tool: calc_reward_fn(n, t))())
                 else:
                     reward_scores[tool_name] = 0.0
 
@@ -1522,10 +1510,19 @@ class SGLangRollout(BaseRollout):
                 tool_reward_scores = dict(tool_reward_scores)
                 reward_scores.update(tool_reward_scores)
 
-        # 添加user_turn_rewards (从原始请求中获取)
-        reward_scores["user_turn_rewards"] = []
+        # 添加user_turn_rewards
+        if user_turn_rewards is not None:
+            reward_scores["user_turn_rewards"] = user_turn_rewards
+        else:
+            reward_scores["user_turn_rewards"] = []
 
         return reward_scores
+
+    async def _calculate_reward_scores_for_partial_request_async(
+        self, original_req: AsyncRolloutRequest
+    ) -> dict[str, float]:
+        """为部分请求异步计算reward_scores"""
+        return await self._calculate_tool_rewards_async(original_req, user_turn_rewards=[])
 
     async def _create_padding_request_async(self, original_req: AsyncRolloutRequest) -> AsyncRolloutRequest:
         """
