@@ -1401,8 +1401,8 @@ class SGLangRollout(BaseRollout):
             non_tensor_batch=non_tensor_batch,
         )
 
-    def _create_full_padding_request(self, original_req: AsyncRolloutRequest) -> AsyncRolloutRequest:
-        """策略1: 创建全padding的request，response_loss_mask全为0，reward_scores为空"""
+    async def _create_full_padding_request_async(self, original_req: AsyncRolloutRequest) -> AsyncRolloutRequest:
+        """策略1: 创建全padding的request，response_loss_mask全为0，但仍计算真实reward_scores"""
         # 创建padding的response_ids (全为pad_token_id)
         padding_response_length = self.config.response_length
         padding_response_ids = torch.full(
@@ -1440,6 +1440,9 @@ class SGLangRollout(BaseRollout):
             device=original_req.loss_mask.device if original_req.loss_mask is not None else "cpu",
         )
 
+        # 计算真实的reward_scores，即使response是padding的
+        reward_scores = await self._calculate_reward_scores_for_partial_request_async(original_req)
+
         # 创建新的请求，保持原始结构但使用padding数据
         padding_req = AsyncRolloutRequest(
             batch_data_id=original_req.batch_data_id,
@@ -1465,7 +1468,7 @@ class SGLangRollout(BaseRollout):
             loss_mask=original_req.loss_mask,  # 保持原始loss_mask
             prompt_loss_mask=original_req.prompt_loss_mask,  # 保持原始prompt_loss_mask
             response_loss_mask=padding_response_loss_mask,  # 使用padding的response_loss_mask (全为0)
-            reward_scores={},  # 空的reward_scores
+            reward_scores=reward_scores,  # 计算真实的reward_scores
             max_prompt_len=original_req.max_prompt_len,
             max_response_len=original_req.max_response_len,
             max_model_len=original_req.max_model_len,
@@ -1482,244 +1485,6 @@ class SGLangRollout(BaseRollout):
 
         logger.info(f"Created full padding request for aborted request {original_req.request_id}")
         return padding_req
-
-    def _create_partial_request_with_zero_mask(self, original_req: AsyncRolloutRequest) -> AsyncRolloutRequest:
-        """策略2: 返回部分结果，但response_loss_mask全为0，reward_scores正常计算"""
-        # 计算已经生成的response长度
-        if original_req.response_ids is not None:
-            actual_response_length = original_req.response_ids.shape[-1]
-        else:
-            actual_response_length = 0
-
-        # 如果没有任何response，创建最小长度的padding
-        if actual_response_length == 0:
-            actual_response_length = 1
-            partial_response_ids = torch.full(
-                (1, actual_response_length),
-                self.pad_token_id,
-                dtype=torch.long,
-                device=original_req.input_ids.device if original_req.input_ids is not None else "cpu",
-            )
-        else:
-            partial_response_ids = original_req.response_ids
-
-        # 创建padding到目标长度
-        padding_response_length = self.config.response_length
-        if actual_response_length < padding_response_length:
-            padding_length = padding_response_length - actual_response_length
-            padding_ids = torch.full(
-                (1, padding_length),
-                self.pad_token_id,
-                dtype=torch.long,
-                device=partial_response_ids.device,
-            )
-            partial_response_ids = torch.cat([partial_response_ids, padding_ids], dim=-1)
-
-        # 创建attention_mask (实际内容为1，padding为0)
-        partial_response_attention_mask = torch.zeros(
-            (1, padding_response_length),
-            dtype=torch.long,
-            device=partial_response_ids.device,
-        )
-        partial_response_attention_mask[:, :actual_response_length] = 1
-
-        # 创建position_ids
-        if original_req.position_ids is not None:
-            prompt_length = original_req.prompt_ids.shape[-1] if original_req.prompt_ids is not None else 0
-            partial_response_position_ids = torch.arange(
-                prompt_length, prompt_length + padding_response_length, dtype=torch.long
-            ).unsqueeze(0)
-            if original_req.position_ids.dim() == 2:
-                partial_response_position_ids = partial_response_position_ids.repeat(
-                    original_req.position_ids.shape[0], 1
-                )
-        else:
-            partial_response_position_ids = None
-
-        # 创建loss_mask (全为0，确保不参与loss计算)
-        partial_response_loss_mask = torch.zeros(
-            (1, padding_response_length),
-            dtype=torch.long,
-            device=partial_response_ids.device,
-        )
-
-        # 计算reward_scores (正常计算)
-        reward_scores = self._calculate_reward_scores_for_partial_request(original_req)
-
-        # 创建新的请求
-        partial_req = AsyncRolloutRequest(
-            batch_data_id=original_req.batch_data_id,
-            rollout_offset=original_req.rollout_offset,
-            request_id=original_req.request_id + "_partial_zero_mask",
-            state=AsyncRolloutRequestStateEnum.COMPLETED,
-            messages=original_req.messages,
-            multi_modal_keys=original_req.multi_modal_keys,
-            multi_modal_data=original_req.multi_modal_data,
-            multi_modal_inputs=original_req.multi_modal_inputs,
-            tool_schemas=original_req.tool_schemas,
-            tools_kwargs=original_req.tools_kwargs,
-            interaction_kwargs=original_req.interaction_kwargs,
-            input_ids=original_req.input_ids,
-            prompt_ids=original_req.prompt_ids,
-            response_ids=partial_response_ids,
-            attention_mask=original_req.attention_mask,
-            prompt_attention_mask=original_req.prompt_attention_mask,
-            response_attention_mask=partial_response_attention_mask,
-            position_ids=original_req.position_ids,
-            prompt_position_ids=original_req.prompt_position_ids,
-            response_position_ids=partial_response_position_ids,
-            loss_mask=original_req.loss_mask,
-            prompt_loss_mask=original_req.prompt_loss_mask,
-            response_loss_mask=partial_response_loss_mask,  # 全为0
-            reward_scores=reward_scores,  # 正常计算
-            max_prompt_len=original_req.max_prompt_len,
-            max_response_len=original_req.max_response_len,
-            max_model_len=original_req.max_model_len,
-            metrics=original_req.metrics,
-            output_token_ids=original_req.output_token_ids,
-            rollout_log_probs=original_req.rollout_log_probs,
-            use_inference_chat_template=original_req.use_inference_chat_template,
-            tokenization_sanity_check_mode=original_req.tokenization_sanity_check_mode,
-            generation_prompt_ids=original_req.generation_prompt_ids,
-            base_conv_wo_gen_prompt_end_pos=original_req.base_conv_wo_gen_prompt_end_pos,
-            base_conv_with_gen_prompt_end_pos=original_req.base_conv_with_gen_prompt_end_pos,
-            processing_class=self.processing_class,
-        )
-
-        logger.info(f"Created partial request with zero mask for aborted request {original_req.request_id}")
-        return partial_req
-
-    def _create_partial_request_with_normal_mask(self, original_req: AsyncRolloutRequest) -> AsyncRolloutRequest:
-        """策略3: 返回部分结果，response_loss_mask正常设置，reward_scores正常计算"""
-        # 计算已经生成的response长度
-        if original_req.response_ids is not None:
-            actual_response_length = original_req.response_ids.shape[-1]
-        else:
-            actual_response_length = 0
-
-        # 如果没有任何response，创建最小长度的padding
-        if actual_response_length == 0:
-            actual_response_length = 1
-            partial_response_ids = torch.full(
-                (1, actual_response_length),
-                self.pad_token_id,
-                dtype=torch.long,
-                device=original_req.input_ids.device if original_req.input_ids is not None else "cpu",
-            )
-        else:
-            partial_response_ids = original_req.response_ids
-
-        # 创建padding到目标长度
-        padding_response_length = self.config.response_length
-        if actual_response_length < padding_response_length:
-            padding_length = padding_response_length - actual_response_length
-            padding_ids = torch.full(
-                (1, padding_length),
-                self.pad_token_id,
-                dtype=torch.long,
-                device=partial_response_ids.device,
-            )
-            partial_response_ids = torch.cat([partial_response_ids, padding_ids], dim=-1)
-
-        # 创建attention_mask (实际内容为1，padding为0)
-        partial_response_attention_mask = torch.zeros(
-            (1, padding_response_length),
-            dtype=torch.long,
-            device=partial_response_ids.device,
-        )
-        partial_response_attention_mask[:, :actual_response_length] = 1
-
-        # 创建position_ids
-        if original_req.position_ids is not None:
-            prompt_length = original_req.prompt_ids.shape[-1] if original_req.prompt_ids is not None else 0
-            partial_response_position_ids = torch.arange(
-                prompt_length, prompt_length + padding_response_length, dtype=torch.long
-            ).unsqueeze(0)
-            if original_req.position_ids.dim() == 2:
-                partial_response_position_ids = partial_response_position_ids.repeat(
-                    original_req.position_ids.shape[0], 1
-                )
-        else:
-            partial_response_position_ids = None
-
-        # 创建loss_mask (正常设置，实际内容为1，padding为0)
-        partial_response_loss_mask = torch.zeros(
-            (1, padding_response_length),
-            dtype=torch.long,
-            device=partial_response_ids.device,
-        )
-        partial_response_loss_mask[:, :actual_response_length] = 1
-
-        # 计算reward_scores (正常计算)
-        reward_scores = self._calculate_reward_scores_for_partial_request(original_req)
-
-        # 创建新的请求
-        partial_req = AsyncRolloutRequest(
-            batch_data_id=original_req.batch_data_id,
-            rollout_offset=original_req.rollout_offset,
-            request_id=original_req.request_id + "_partial_normal_mask",
-            state=AsyncRolloutRequestStateEnum.COMPLETED,
-            messages=original_req.messages,
-            multi_modal_keys=original_req.multi_modal_keys,
-            multi_modal_data=original_req.multi_modal_data,
-            multi_modal_inputs=original_req.multi_modal_inputs,
-            tool_schemas=original_req.tool_schemas,
-            tools_kwargs=original_req.tools_kwargs,
-            interaction_kwargs=original_req.interaction_kwargs,
-            input_ids=original_req.input_ids,
-            prompt_ids=original_req.prompt_ids,
-            response_ids=partial_response_ids,
-            attention_mask=original_req.attention_mask,
-            prompt_attention_mask=original_req.prompt_attention_mask,
-            response_attention_mask=partial_response_attention_mask,
-            position_ids=original_req.position_ids,
-            prompt_position_ids=original_req.prompt_position_ids,
-            response_position_ids=partial_response_position_ids,
-            loss_mask=original_req.loss_mask,
-            prompt_loss_mask=original_req.prompt_loss_mask,
-            response_loss_mask=partial_response_loss_mask,  # 正常设置
-            reward_scores=reward_scores,  # 正常计算
-            max_prompt_len=original_req.max_prompt_len,
-            max_response_len=original_req.max_response_len,
-            max_model_len=original_req.max_model_len,
-            metrics=original_req.metrics,
-            output_token_ids=original_req.output_token_ids,
-            rollout_log_probs=original_req.rollout_log_probs,
-            use_inference_chat_template=original_req.use_inference_chat_template,
-            tokenization_sanity_check_mode=original_req.tokenization_sanity_check_mode,
-            generation_prompt_ids=original_req.generation_prompt_ids,
-            base_conv_wo_gen_prompt_end_pos=original_req.base_conv_wo_gen_prompt_end_pos,
-            base_conv_with_gen_prompt_end_pos=original_req.base_conv_with_gen_prompt_end_pos,
-            processing_class=self.processing_class,
-        )
-
-        logger.info(f"Created partial request with normal mask for aborted request {original_req.request_id}")
-        return partial_req
-
-    def _calculate_reward_scores_for_partial_request(self, original_req: AsyncRolloutRequest) -> dict[str, float]:
-        """为部分请求计算reward_scores"""
-        reward_scores = {}
-
-        # 计算工具reward
-        if original_req.tools_kwargs and self._tool_map:
-            for tool_name in original_req.tools_kwargs.keys():
-                if tool_name in self._tool_map:
-                    try:
-                        # 尝试计算当前状态的reward
-                        tool = self._tool_map[tool_name]
-                        # 这里我们需要异步调用，但在同步上下文中，我们使用默认值
-                        # 在实际使用中，这应该在异步环境中调用
-                        reward_scores[tool_name] = 0.0  # 默认值，实际应该调用tool.calc_reward
-                    except Exception as e:
-                        logger.warning(f"Failed to calculate reward for tool {tool_name}: {e}")
-                        reward_scores[tool_name] = 0.0
-                else:
-                    reward_scores[tool_name] = 0.0
-
-        # 添加user_turn_rewards
-        reward_scores["user_turn_rewards"] = []
-
-        return reward_scores
 
     async def _calculate_reward_scores_for_partial_request_async(
         self, original_req: AsyncRolloutRequest
@@ -1770,14 +1535,14 @@ class SGLangRollout(BaseRollout):
         drop_method = os.getenv("drop_method", "padding")
 
         if drop_method == "padding":
-            return self._create_full_padding_request(original_req)
+            return await self._create_full_padding_request_async(original_req)
         elif drop_method == "partial_zero_mask":
             return await self._create_partial_request_async(original_req, use_normal_loss_mask=False)
         elif drop_method == "partial_normal_mask":
             return await self._create_partial_request_async(original_req, use_normal_loss_mask=True)
         else:
             logger.warning(f"Unknown drop_method: {drop_method}, using default 'padding' strategy.")
-            return self._create_full_padding_request(original_req)
+            return await self._create_full_padding_request_async(original_req)
 
     async def _create_partial_request_async(
         self, original_req: AsyncRolloutRequest, use_normal_loss_mask: bool
