@@ -9,7 +9,7 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 # 检查是否传入了参数
 if [ $# -eq 0 ]; then
     # 如果没有传入参数，使用默认值
-    rates=(0.4 0.35 0.3 0.25 0.2 0.15 0.1 0.05 0)
+    rates=(0 0.05 0.1 0.15 0.2 0.25 0.3 0.35 0.4)
     echo "使用默认的 OVER_SAMPLE_RATE 数组: ${rates[*]}"
 else
     # 使用传入的参数作为数组

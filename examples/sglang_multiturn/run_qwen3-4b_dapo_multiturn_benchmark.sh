@@ -30,7 +30,7 @@ hf download \
     --local-dir $HOME/data/Maxwell-Jia/AIME_2024
 
 
-EXPERIMENT_NAME="qwen3-4b_$(now)_$OVER_SAMPLE_RATE"
+EXPERIMENT_NAME="$(now)_$OVER_SAMPLE_RATE"
 
 
 python3 -m verl.trainer.main_ppo \
