@@ -1251,7 +1251,10 @@ class SGLangRollout(BaseRollout):
             multi_modal_inputs.append(req.multi_modal_inputs)
             request_ids.append(req.request_id)
             # Collect num_turns from the request
-            num_turns_list.append(getattr(req, "num_turns", 1))  # Default to 1 if not set
+            num_turns = getattr(req, "num_turns", 1)  # Default to 1 if not set
+            if num_turns is None:
+                num_turns = 1  # Ensure None values are converted to 1
+            num_turns_list.append(num_turns)
             if self.config.calculate_log_probs:
                 # extract output log_probs
                 output_logprobs.append(req.rollout_log_probs[-len(req.response_ids) :])
@@ -1449,6 +1452,7 @@ class SGLangRollout(BaseRollout):
             metrics={},
             output_token_ids=None,
             rollout_log_probs=None,
+            num_turns=1,  # Set default num_turns for padding requests
             use_inference_chat_template=original_req.use_inference_chat_template,
             tokenization_sanity_check_mode=original_req.tokenization_sanity_check_mode,
             generation_prompt_ids=original_req.generation_prompt_ids,
