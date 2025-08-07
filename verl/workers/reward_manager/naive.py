@@ -70,7 +70,21 @@ class NaiveRewardManager(AbstractRewardManager):
 
             response_ids = data_item.batch["responses"]
             valid_response_length = data_item.batch["attention_mask"][prompt_length:].sum()
-            valid_response_ids = response_ids[:valid_response_length]
+
+            # 优先使用 rollout 提供的 response_mask 来界定“LLM 生成”的有效 token，避免将 tool 返回计入解答
+            if "response_mask" in data_item.batch.keys():
+                llm_mask = data_item.batch["response_mask"][:valid_response_length]
+                if llm_mask.sum() > 0:
+                    valid_response_ids = response_ids[:valid_response_length][llm_mask.bool()]
+                    last_llm_idx = int(llm_mask.sum().item()) - 1
+                else:
+                    # 回退策略：若不存在 LLM 生成 token，则退回 attention 裁剪
+                    valid_response_ids = response_ids[:valid_response_length]
+                    last_llm_idx = int(valid_response_length.item()) - 1 if valid_response_length.item() > 0 else 0
+            else:
+                # 单轮/无工具场景：保持原有行为
+                valid_response_ids = response_ids[:valid_response_length]
+                last_llm_idx = int(valid_response_length.item()) - 1 if valid_response_length.item() > 0 else 0
 
             # decode
             prompt_str = self.tokenizer.decode(valid_prompt_ids, skip_special_tokens=True)
@@ -97,7 +111,9 @@ class NaiveRewardManager(AbstractRewardManager):
             else:
                 reward = score
 
-            reward_tensor[i, valid_response_length - 1] = reward
+            # 奖励落在“最后一个 LLM 生成 token”位置，避免落在 tool 返回或 padding 上
+            if last_llm_idx >= 0 and last_llm_idx < response_ids.shape[-1]:
+                reward_tensor[i, last_llm_idx] = reward
 
             if data_source not in already_print_data_sources:
                 already_print_data_sources[data_source] = 0
