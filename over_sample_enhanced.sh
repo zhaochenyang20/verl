@@ -28,7 +28,7 @@ while true; do
     # 启动训练（后台运行）
     echo "启动训练..."
     # 使用引号保护参数，确保正确传递
-    bash examples/sglang_multiturn/run_qwen3-4b_dpo_multiturn_benchmark.sh "$rate" &
+    bash examples/sglang_multiturn/run_qwen3-4b_dapo_multiturn_benchmark.sh "$rate" &
     TRAIN_PID=$!
     
     # 等待训练完成或超时
