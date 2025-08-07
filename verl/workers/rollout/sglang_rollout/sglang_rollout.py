@@ -1158,6 +1158,7 @@ class SGLangRollout(BaseRollout):
 
                 async def process_request_with_monitoring(req):
                     nonlocal completed_count
+                    nonlocal async_rollout_with_monitoring_start_time
                     try:
                         result = await self._async_rollout_a_request(req, do_sample, is_validate, **kwargs)
 
@@ -1169,6 +1170,16 @@ class SGLangRollout(BaseRollout):
                         # request is cancelled, return padding
                         logger.info(f"Request {req.request_id} was cancelled, creating padding")
                         aborted_requests.append(req.request_id)
+                        torch.cuda.synchronize()
+                        req_aborted_time = time.time()
+                        self.log_manager.log(
+                            self.log_path,
+                            event="aborted_request_with_cancelled_error",
+                            duration=req_aborted_time - async_rollout_with_monitoring_start_time,
+                            workid=self._rank,
+                            step=self.step,
+                            extra={"request_id": req.request_id},
+                        )
                         return self._create_padding_request(req)
                     except Exception as e:
                         logger.error(f"Uncaught exception in process_request_with_monitoring: {e}")
@@ -1192,7 +1203,7 @@ class SGLangRollout(BaseRollout):
 
                 async def run_with_cancellation():
                     nonlocal all_tasks
-
+                    nonlocal async_rollout_with_monitoring_start_time
                     # create all tasks
                     all_tasks = [asyncio.create_task(process_request_with_monitoring(req)) for req in req_list]
 
@@ -1214,7 +1225,7 @@ class SGLangRollout(BaseRollout):
                                 aborted_end_time = time.time()
                                 self.log_manager.log(
                                     self.log_path,
-                                    event="aborted_request",
+                                    event="aborted_request_with_exception",
                                     duration=aborted_end_time - async_rollout_with_monitoring_start_time,
                                     workid=self._rank,
                                     step=self.step,
