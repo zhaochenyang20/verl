@@ -113,6 +113,7 @@ class AsyncRolloutRequest(BaseModel):
     metrics: dict[str, list[Any]] = {}
     output_token_ids: torch.Tensor | None = None
     rollout_log_probs: torch.Tensor | None = None
+    num_turns: Optional[int] = None
 
     use_inference_chat_template: bool
     tokenization_sanity_check_mode: TokenizationSanityCheckModeEnum
