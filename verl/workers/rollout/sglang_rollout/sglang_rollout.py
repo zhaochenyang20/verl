@@ -869,6 +869,8 @@ class SGLangRollout(BaseRollout):
                         finish_reason_type = FinishReasonTypeEnum.STOP
                         break
                     _req.state = AsyncRolloutRequestStateEnum.RUNNING
+                    # Increment user_turns after tool calls, similar to agent loop
+                    user_turns += 1
                 else:
                     raise ValueError(f"Unexpected tool calling last message state: {_req.messages[-1]}")
             elif _req.state == AsyncRolloutRequestStateEnum.RUNNING:
@@ -990,6 +992,9 @@ class SGLangRollout(BaseRollout):
         if current_turns >= self.config.multi_turn.max_assistant_turns:
             finish_reason_type = FinishReasonTypeEnum.STOP
 
+        # Calculate num_turns similar to agent loop
+        num_turns = user_turns + current_turns + 1  # +1 for initial turn
+
         # Calculate the reward for each tool
         async def calc_reward_and_release_fn(name: str, tool: BaseTool):
             reward = await tool.calc_reward(_req.request_id, **_req.tools_kwargs[name].get("calc_reward_kwargs", {}))
@@ -1004,6 +1009,10 @@ class SGLangRollout(BaseRollout):
         tool_reward_scores = dict(tool_reward_scores)
         all_rewards = {**tool_reward_scores, **{"user_turn_rewards": user_turn_rewards}}
         _req.finalize(self.processing_class, all_rewards, finish_reason_type)
+
+        # Store num_turns in the request for later use
+        _req.num_turns = num_turns
+
         if self.config.calculate_log_probs:
             # 把input_ids输入sglang内生成一遍，并设置max_new_tokens=0，以生成log_probs
             debug_sampling_params = {**self.sampling_params}
@@ -1197,6 +1206,7 @@ class SGLangRollout(BaseRollout):
         reward_scores = []
         multi_modal_inputs = []
         request_ids = []
+        num_turns_list = []
         if self.config.calculate_log_probs:
             output_logprobs = []
             rollout_output_token_ids = []
@@ -1240,6 +1250,8 @@ class SGLangRollout(BaseRollout):
             reward_scores.append(req.reward_scores)
             multi_modal_inputs.append(req.multi_modal_inputs)
             request_ids.append(req.request_id)
+            # Collect num_turns from the request
+            num_turns_list.append(getattr(req, "num_turns", 1))  # Default to 1 if not set
             if self.config.calculate_log_probs:
                 # extract output log_probs
                 output_logprobs.append(req.rollout_log_probs[-len(req.response_ids) :])
@@ -1349,6 +1361,7 @@ class SGLangRollout(BaseRollout):
             "messages": np.array(messages),
             "reward_scores": np.array(reward_scores),
             "request_id": np.array(request_ids),
+            "__num_turns__": np.array(num_turns_list, dtype=np.int32),
         }
 
         is_multimodal = isinstance(self.processing_class, ProcessorMixin) and (
