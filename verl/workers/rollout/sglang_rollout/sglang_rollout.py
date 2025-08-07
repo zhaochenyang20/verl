@@ -16,11 +16,14 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
+import json
 import logging
 import multiprocessing as mp
 import os
 import time
 from copy import deepcopy
+from datetime import datetime
 from json import JSONDecodeError
 from typing import Any, Optional
 from uuid import uuid4
@@ -120,6 +123,47 @@ def _set_envs_and_config(server_args: ServerArgs):
 
 
 sglang.srt.entrypoints.engine._set_envs_and_config = _set_envs_and_config
+
+
+# logging tool for sglang multi-turn rollout
+class SGLangLogManager:
+    def __init__(self):
+        self.file_handles = {}
+        atexit.register(self.close_all)
+
+    def get_handle(self, log_path):
+        if log_path not in self.file_handles:
+            os.makedirs(os.path.dirname(log_path), exist_ok=True)
+            self.file_handles[log_path] = open(log_path, "a", buffering=1)
+        return self.file_handles[log_path]
+
+    def log(self, log_path, event, duration=None, extra=None, workid=None, step=None, **extra_keys):
+        handle = self.get_handle(log_path)
+        log_entry = {
+            "timestamp": datetime.now().isoformat(),
+            "event": event,
+        }
+        if duration is not None:
+            log_entry["duration_sec"] = duration
+        if extra is not None:
+            log_entry["extra"] = extra
+        if workid is not None:
+            log_entry["workid"] = workid
+        if step is not None:
+            log_entry["step"] = step
+        if extra_keys is not None:
+            for key in extra_keys:
+                log_entry[key] = extra_keys[key]
+        ordered_keys = ["timestamp", "event", "duration_sec"] + [
+            k for k in log_entry.keys() if k not in ("timestamp", "event", "duration_sec")
+        ]
+        ordered_entry = {k: log_entry[k] for k in ordered_keys if k in log_entry}
+        handle.write(json.dumps(ordered_entry) + "\n")
+        handle.flush()
+
+    def close_all(self):
+        for handle in self.file_handles.values():
+            handle.close()
 
 
 # because chatCompletion is an async method, it makes the whole ray actor be an async actor
@@ -294,6 +338,11 @@ class SGLangRollout(BaseRollout):
         super().__init__()
         self.config = config
         self._device_mesh_cpu = device_mesh
+
+        self.step = 0
+        self.log_manager = SGLangLogManager()
+        self.log_dir = "logs/" + os.getenv("EXPERIMENT_NAME", "multiturn_log_dir")
+
         os.environ.setdefault("SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK", "true")
 
         (
@@ -583,6 +632,7 @@ class SGLangRollout(BaseRollout):
             responses:     |<- LLM generation ->|<- tool_calls ->|<- LLM generation ->|<- padding ->|
             response_mask: | 1, 1, 1, ..., 1, 1 | 0, 0, .., 0, 0 | 1, 1, 1, ..., 1, 1 | 0, 0, ..., 0|
         """
+        self.step += 1
         if self.config.multi_turn.enable:
             return self._req_level_generate_sequences(prompts, **kwargs)
         return self._batch_level_generate_sequences(prompts, **kwargs)
@@ -1160,6 +1210,16 @@ class SGLangRollout(BaseRollout):
                                 # if it is an exception (including CancelledError), create padding
                                 logger.warning(f"Task {i} resulted in exception: {result}")
                                 output_req_list.append(self._create_padding_request(req_list[i]))
+                                torch.cuda.synchronize()
+                                aborted_end_time = time.time()
+                                self.log_manager.log(
+                                    self.log_path,
+                                    event="aborted_request",
+                                    duration=aborted_end_time - async_rollout_with_monitoring_start_time,
+                                    workid=self._rank,
+                                    step=self.step,
+                                    extra={"request_id": req_list[i].request_id},
+                                )
                             else:
                                 output_req_list.append(result)
 
@@ -1173,8 +1233,25 @@ class SGLangRollout(BaseRollout):
                             pass
 
                 # run async tasks
+                self.log_path = os.path.join(self.log_dir, f"step_{self.step}", f"worker_{self._rank}.jsonl")
+                torch.cuda.synchronize()
+                async_rollout_with_monitoring_start_time = time.time()
                 loop = asyncio.get_event_loop()
                 output_req_list = loop.run_until_complete(run_with_cancellation())
+                torch.cuda.synchronize()
+                async_rollout_with_monitoring_end_time = time.time()
+                self.log_manager.log(
+                    self.log_path,
+                    event="async_rollout_with_monitoring_duration",
+                    duration=async_rollout_with_monitoring_end_time - async_rollout_with_monitoring_start_time,
+                    workid=self._rank,
+                    step=self.step,
+                    extra={
+                        "total_requests": total_requests,
+                        "target_completion": target_completion,
+                        "completed_count": completed_count,
+                    },
+                )
 
             sorted_output_req_list = sorted(output_req_list, key=lambda x: (x.batch_data_id, x.rollout_offset))
         else:
