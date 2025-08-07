@@ -236,7 +236,7 @@ class RLHFDataset(Dataset):
 
                 # due to the video key is "video" instead of "videos" in vllm, we need to use "video" here
                 # link: https://github.com/vllm-project/vllm/blob/3c545c0c3b98ee642373a308197d750d0e449403/vllm/multimodal/parse.py#L205
-                multi_modal_data["video"] = [video.numpy() for video in videos]
+                multi_modal_data["video"] = [video.numpy().copy() for video in videos]
 
             model_inputs = self.processor(text=[raw_prompt], images=images, videos=videos, return_tensors="pt")
 

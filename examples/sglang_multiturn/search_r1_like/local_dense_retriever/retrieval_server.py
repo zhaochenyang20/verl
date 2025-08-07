@@ -112,7 +112,7 @@ class Encoder:
             if "dpr" not in self.model_name.lower():
                 query_emb = torch.nn.functional.normalize(query_emb, dim=-1)
 
-        query_emb = query_emb.detach().cpu().numpy()
+        query_emb = query_emb.detach().cpu().numpy().copy()
         query_emb = query_emb.astype(np.float32, order="C")
 
         del inputs, output

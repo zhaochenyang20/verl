@@ -537,10 +537,10 @@ class DataProto:
 
         if isinstance(idxs, np.ndarray):
             idxs_np = idxs
-            idxs_torch = torch.from_numpy(idxs)
+            idxs_torch = torch.from_numpy(idxs.copy())
         else:  # torch.Tensor
             idxs_torch = idxs
-            idxs_np = idxs.detach().cpu().numpy()
+            idxs_np = idxs.detach().cpu().numpy().copy()
 
         batch_size = int(idxs_np.sum()) if idxs_np.dtype == bool else idxs_np.shape[0]
 
@@ -828,7 +828,7 @@ class DataProto:
         """
         Note that this operation is in-place
         """
-        indices_np = indices.detach().numpy()
+        indices_np = indices.detach().numpy().copy()
         self.batch = self.batch[indices]
         self.non_tensor_batch = {key: val[indices_np] for key, val in self.non_tensor_batch.items()}
 

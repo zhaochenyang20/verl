@@ -46,7 +46,7 @@ def broadcast_pyobj(
             serialized_data = pickle.dumps(data)
             size = len(serialized_data)
 
-            tensor_data = torch.ByteTensor(np.frombuffer(serialized_data, dtype=np.uint8)).to(device)
+            tensor_data = torch.ByteTensor(np.frombuffer(serialized_data, dtype=np.uint8).copy()).to(device)
             tensor_size = torch.tensor([size], dtype=torch.long, device=device)
 
             dist.broadcast(tensor_size, src=src, group=dist_group)
@@ -63,7 +63,7 @@ def broadcast_pyobj(
         tensor_data = torch.empty(size, dtype=torch.uint8, device=device)
         dist.broadcast(tensor_data, src=src, group=dist_group)
 
-        serialized_data = bytes(tensor_data.cpu().numpy())
+        serialized_data = bytes(tensor_data.cpu().numpy().copy())
         data = pickle.loads(serialized_data)
         return data
 

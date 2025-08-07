@@ -192,11 +192,11 @@ class RayEntropyTrainer(RayPPOTrainer):
                         if metric_name == "seq_final_reward":
                             # Turn to numpy for easier filtering
                             new_batch.non_tensor_batch["seq_final_reward"] = (
-                                new_batch.batch["token_level_rewards"].sum(dim=-1).numpy()
+                                new_batch.batch["token_level_rewards"].sum(dim=-1).numpy().copy()
                             )
                         elif metric_name == "seq_reward":
                             new_batch.non_tensor_batch["seq_reward"] = (
-                                new_batch.batch["token_level_scores"].sum(dim=-1).numpy()
+                                new_batch.batch["token_level_scores"].sum(dim=-1).numpy().copy()
                             )
 
                         # Collect the sequence reward for each trajectory

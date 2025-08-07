@@ -1360,7 +1360,7 @@ def compute_pf_ppo_reweight_data(
 
     resampled_batch = {key: tensor[sample_indices] for key, tensor in data.batch.items()}
 
-    sample_indices_np = sample_indices.numpy()
+    sample_indices_np = sample_indices.numpy().copy()
     resampled_non_tensor_batch = {}
     for key, array in data.non_tensor_batch.items():
         if isinstance(array, np.ndarray):

@@ -415,7 +415,7 @@ def remove_pad_token(input_ids: torch.Tensor, attention_mask: torch.Tensor):
     """
     no_padding_batch = []
     for ids, mask in zip(input_ids, attention_mask, strict=True):
-        no_padding_batch.append((ids[len(ids) - mask.sum() :]).cpu().numpy().tolist())
+        no_padding_batch.append((ids[len(ids) - mask.sum() :]).cpu().numpy().copy().tolist())
     return no_padding_batch
 
 
