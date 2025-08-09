@@ -217,6 +217,12 @@ class AsyncEngine(sglang.srt.entrypoints.engine.Engine):
             logger.error(f"Failed to abort requests: {e}")
             raise
 
+    async def start_profile(self, **kwargs):
+        return await self.tokenizer_manager.start_profile(**kwargs)
+
+    async def stop_profile(self):
+        return await self.tokenizer_manager.stop_profile()
+
 
 # NOTE(sgm): add for verl. We can optimize it by making
 #  the dataloader yield List[int] without padding.
@@ -380,6 +386,18 @@ class SGLangRollout(BaseRollout):
                 self.pad_token_id = self.processing_class.tokenizer.pad_token_id
             except AttributeError as e:
                 raise ValueError(f"Cannot get pad_token_id from processing_class {self.processing_class}") from e
+
+    def start_profile(self, **kwargs):
+        if self._engine and self._tp_rank == 0:
+            logger.warning(f"SGLangRollout.start_profile called with kwargs: {kwargs}")
+            loop = asyncio.get_event_loop()
+            loop.run_until_complete(self._engine.start_profile(**kwargs))
+
+    def stop_profile(self):
+        if self._engine and self._tp_rank == 0:
+            logger.warning("SGLangRollout.stop_profile called.")
+            loop = asyncio.get_event_loop()
+            loop.run_until_complete(self._engine.stop_profile())
 
     def _init_distributed_env(self, device_mesh_cpu, **kwargs):
         self._device_mesh_cpu = device_mesh_cpu
@@ -633,6 +651,26 @@ class SGLangRollout(BaseRollout):
             response_mask: | 1, 1, 1, ..., 1, 1 | 0, 0, .., 0, 0 | 1, 1, 1, ..., 1, 1 | 0, 0, ..., 0|
         """
         self.step += 1
+        if self.step == 2:  # Start profiling at step 2
+            profile_dir = "/tmp/sglang_profile_rollout"
+            # Ensure the SGLANG_TORCH_PROFILER_DIR env var is set for the engine
+            if "SGLANG_TORCH_PROFILER_DIR" not in os.environ:
+                os.environ["SGLANG_TORCH_PROFILER_DIR"] = profile_dir
+                if not os.path.exists(profile_dir):
+                    os.makedirs(profile_dir)
+
+            logger.warning(
+                f"--- Starting profiler at step {self.step}. Output  in {os.environ['SGLANG_TORCH_PROFILER_DIR']} ---"
+            )
+            # Start profiling without num_steps for manual control
+            self.start_profile(output_dir=profile_dir)
+
+        if self.step == 4:  # Stop profiling after step 3
+            logger.warning(f"--- Stopping profiler at step {self.step}. ---")
+            self.stop_profile()
+
+        # --- End of Profiling Example ---
+
         if self.config.multi_turn.enable:
             return self._req_level_generate_sequences(prompts, **kwargs)
         return self._batch_level_generate_sequences(prompts, **kwargs)
@@ -1180,7 +1218,9 @@ class SGLangRollout(BaseRollout):
                             step=self.step,
                             extra={"request_id": req.request_id},
                         )
-                        return self._create_padding_request(req)
+                        self._create_padding_request(req)
+
+                        return
                     except Exception as e:
                         logger.error(f"Uncaught exception in process_request_with_monitoring: {e}")
                         logger.error("This shall not happen, please check the code")
@@ -1458,6 +1498,9 @@ class SGLangRollout(BaseRollout):
         # 2. response_loss_mask is all 0, ensuring it is ignored in loss calculation
         # 3. keep the original request structure, but the content is empty
         # create padding response_ids (all pad_token_id)
+        ## TODO: Check the padding duration
+        ## TODO: Check the padding if training duration be affected
+
         padding_response_length = self.config.response_length
         padding_response_ids = torch.full(
             (1, padding_response_length),

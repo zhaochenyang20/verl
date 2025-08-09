@@ -12,7 +12,7 @@ function now() {
     date '+%d-%H-%M'
 }
 
-export CUDA_VISIBLE_DEVICES=0,1,2,3
+export CUDA_VISIBLE_DEVICES=0,4,6,7
 EXPERIMENT_NAME="qwen2.5-3b_baseline_$(now)"
 
 python3 -m verl.trainer.main_ppo \
