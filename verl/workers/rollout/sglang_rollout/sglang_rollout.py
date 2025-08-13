@@ -651,23 +651,23 @@ class SGLangRollout(BaseRollout):
             response_mask: | 1, 1, 1, ..., 1, 1 | 0, 0, .., 0, 0 | 1, 1, 1, ..., 1, 1 | 0, 0, ..., 0|
         """
         self.step += 1
-        if self.step == 2:  # Start profiling at step 2
-            profile_dir = "/tmp/sglang_profile_rollout"
-            # Ensure the SGLANG_TORCH_PROFILER_DIR env var is set for the engine
-            if "SGLANG_TORCH_PROFILER_DIR" not in os.environ:
-                os.environ["SGLANG_TORCH_PROFILER_DIR"] = profile_dir
-                if not os.path.exists(profile_dir):
-                    os.makedirs(profile_dir)
+        # if self.step == 2:  # Start profiling at step 2
+        #     profile_dir = "/tmp/sglang_profile_rollout"
+        #     # Ensure the SGLANG_TORCH_PROFILER_DIR env var is set for the engine
+        #     if "SGLANG_TORCH_PROFILER_DIR" not in os.environ:
+        #         os.environ["SGLANG_TORCH_PROFILER_DIR"] = profile_dir
+        #         if not os.path.exists(profile_dir):
+        #             os.makedirs(profile_dir)
 
-            logger.warning(
-                f"--- Starting profiler at step {self.step}. Output  in {os.environ['SGLANG_TORCH_PROFILER_DIR']} ---"
-            )
-            # Start profiling without num_steps for manual control
-            self.start_profile(output_dir=profile_dir)
+        #     logger.warning(
+        #         f"--- Starting profiler at step {self.step}. Output  in {os.environ['SGLANG_TORCH_PROFILER_DIR']} ---"
+        #     )
+        #     Start profiling without num_steps for manual control
+        #     self.start_profile(output_dir=profile_dir, num_steps=1)
 
-        if self.step == 4:  # Stop profiling after step 3
-            logger.warning(f"--- Stopping profiler at step {self.step}. ---")
-            self.stop_profile()
+        # if self.step == 4:  # Stop profiling after step 3
+        #     logger.warning(f"--- Stopping profiler at step {self.step}. ---")
+        #     self.stop_profile()
 
         # --- End of Profiling Example ---
 
@@ -1218,9 +1218,18 @@ class SGLangRollout(BaseRollout):
                             step=self.step,
                             extra={"request_id": req.request_id},
                         )
-                        self._create_padding_request(req)
-
-                        return
+                        padding_req = self._create_padding_request(req)
+                        torch.cuda.synchronize()
+                        padding_req_end_time = time.time()
+                        self.log_manager.log(
+                            self.log_path,
+                            event="aborted_request_with_cancelled_error_padding",
+                            duration=padding_req_end_time - req_aborted_time,
+                            workid=self._rank,
+                            step=self.step,
+                            extra={"request_id": req.request_id},
+                        )
+                        return padding_req
                     except Exception as e:
                         logger.error(f"Uncaught exception in process_request_with_monitoring: {e}")
                         logger.error("This shall not happen, please check the code")
