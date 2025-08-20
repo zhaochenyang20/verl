@@ -32,8 +32,8 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.multi_stage_wake_up=True \
     global_profiler.tool=torch_memory \
     global_profiler.save_path=./mem_snapshots \
-    global_profiler.global_tool_config.torch_memory.trace_alloc_max_entries=100000 \
-    global_profiler.global_tool_config.torch_memory.stack_depth=32 \
+    global_profiler.global_tool_config.torch_memory.trace_alloc_max_entries=1000000 \
+    global_profiler.global_tool_config.torch_memory.stack_depth=320 \
     actor_rollout_ref.rollout.enable_chunked_prefill=False \
     actor_rollout_ref.rollout.enforce_eager=False \
     actor_rollout_ref.rollout.free_cache_engine=True \

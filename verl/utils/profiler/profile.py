@@ -19,7 +19,7 @@ import torch
 import torch.distributed
 
 from ..memory_utils import MemorySnapshotSampler, enable_memory_visualize
-from .config import ProfilerConfig, TorchProfilerToolConfig
+from .config import ProfilerConfig, TorchMemoryToolConfig, TorchProfilerToolConfig
 
 
 class Profiler:
@@ -215,7 +215,7 @@ class DistProfiler:
             # Use the torch profiler wrapper defined above
             self._impl = Profiler(config=config, tool_config=tool_config)
         elif self._tool == "torch_memory":
-            self._impl = TorchMemoryProfiler(rank=rank, config=config)
+            self._impl = TorchMemoryProfiler(rank=rank, config=config, tool_config=tool_config)
         else:
             # Fallback to a no-op impl
             self._impl = _NoOpProfiler()
@@ -259,7 +259,9 @@ class TorchMemoryProfiler:
 
     _memory_history_enabled: bool = False
 
-    def __init__(self, rank: int, config: Optional[ProfilerConfig]):
+    def __init__(
+        self, rank: int, config: Optional[ProfilerConfig], tool_config: Optional[TorchMemoryToolConfig] = None
+    ):
         # Always respond to explicit start/stop calls for torch_memory tool,
         # regardless of per-role enable flag, to align with global step control.
         self.enable = True
@@ -271,10 +273,18 @@ class TorchMemoryProfiler:
         self.sub_dir = None
         self.sampler = MemorySnapshotSampler()
 
+        # Get parameters from tool_config, with fallback to defaults
+        if tool_config:
+            trace_alloc_max_entries = tool_config.trace_alloc_max_entries
+            stack_depth = tool_config.stack_depth
+        else:
+            trace_alloc_max_entries = 100_000
+            stack_depth = 32
+
         # Best-effort enable memory history once
         if not TorchMemoryProfiler._memory_history_enabled:
             try:
-                enable_memory_visualize(trace_alloc_max_entries=100_000, stack_depth=32)
+                enable_memory_visualize(trace_alloc_max_entries=trace_alloc_max_entries, stack_depth=stack_depth)
             except Exception:
                 # silently ignore if not supported
                 pass

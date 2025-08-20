@@ -71,7 +71,6 @@ from verl.utils.fsdp_utils import (
     offload_fsdp_optimizer,
 )
 from verl.utils.import_utils import import_external_libs
-from verl.utils.memory_utils import MemorySnapshotSampler, enable_memory_visualize
 from verl.utils.model import compute_position_id_with_mask
 from verl.utils.profiler import DistProfiler, DistProfilerExtension, ProfilerConfig, log_gpu_memory_usage, simple_timer
 from verl.utils.profiler.performance import reduce_timing, topk_reduce_ratio_min_max
@@ -129,37 +128,6 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 world_size=world_size,
                 timeout=datetime.timedelta(seconds=self.config.get("nccl_timeout", 600)),
                 init_method=os.environ.get("DIST_INIT_METHOD", None),
-            )
-
-        profiler_tool = OmegaConf.select(self.config, "actor.profiler.tool")
-        if profiler_tool == "torch_memory":
-            # Backward/forward compatible lookup for torch_memory config
-            # Priority:
-            # 1) actor.profiler.tool_config.torch_memory.*
-            # 2) actor.profiler.global_tool_config.torch_memory.* (legacy unit tests)
-            # 3) global_profiler.global_tool_config.torch_memory.* (CLI/global overrides)
-            # 4) sensible defaults
-            trace_alloc_max_entries = (
-                OmegaConf.select(self.config.actor.profiler, "tool_config.torch_memory.trace_alloc_max_entries")
-                or OmegaConf.select(
-                    self.config.actor.profiler, "global_tool_config.torch_memory.trace_alloc_max_entries"
-                )
-                or OmegaConf.select(
-                    self.config, "global_profiler.global_tool_config.torch_memory.trace_alloc_max_entries"
-                )
-            )
-            stack_depth = (
-                OmegaConf.select(self.config.actor.profiler, "tool_config.torch_memory.stack_depth")
-                or OmegaConf.select(self.config.actor.profiler, "global_tool_config.torch_memory.stack_depth")
-                or OmegaConf.select(self.config, "global_profiler.global_tool_config.torch_memory.stack_depth")
-            )
-
-            enable_memory_visualize(
-                trace_alloc_max_entries=trace_alloc_max_entries,
-                stack_depth=stack_depth,
-            )
-            self.memory_snapshot_sampler = MemorySnapshotSampler(
-                out_dir=OmegaConf.select(self.config, "actor.profiler.save_path")
             )
 
         # build device mesh for FSDP
@@ -970,13 +938,17 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def dump_memory_snapshot(self, tag: str = "manual", sub_dir: str = None) -> None:
         """Manually trigger a CUDA memory snapshot dump on all ranks."""
-        # When torch_memory tool is enabled, memory history is already configured in __init__
-        # Guard when not enabled to avoid AttributeError in environments without profiler config
-        if not hasattr(self, "memory_snapshot_sampler"):
-            return None
-        # Fall back to default path if not provided
-        out_dir = OmegaConf.select(self.config, "actor.profiler.save_path") or "."
-        self.memory_snapshot_sampler.dump_memory_snapshot(out_dir=out_dir, tag=tag, sub_dir=sub_dir)
+        # Memory snapshot is now handled by the profiler system
+        # This method is kept for backward compatibility but delegates to profiler
+        if hasattr(self, "profiler") and hasattr(self.profiler, "_impl"):
+            try:
+                # Try to use the profiler's memory snapshot functionality
+                if hasattr(self.profiler._impl, "sampler"):
+                    out_dir = OmegaConf.select(self.config, "actor.profiler.save_path") or "."
+                    self.profiler._impl.sampler.dump_memory_snapshot(out_dir=out_dir, tag=tag, sub_dir=sub_dir)
+            except Exception:
+                # silently ignore if profiler doesn't support memory snapshots
+                pass
 
 
 class CriticWorker(Worker, DistProfilerExtension):
@@ -984,7 +956,7 @@ class CriticWorker(Worker, DistProfilerExtension):
         Worker.__init__(self)
         omega_profiler_config = config.get("profiler", {})
         profiler_config = omega_conf_to_dataclass(omega_profiler_config, dataclass_type=ProfilerConfig)
-        if omega_profiler_config.get("tool", None) in ["npu", "nsys", "torch"]:
+        if omega_profiler_config.get("tool", None) in ["npu", "nsys", "torch", "torch_memory"]:
             tool_config = omega_conf_to_dataclass(
                 omega_profiler_config.get("tool_config", {}).get(omega_profiler_config.get("tool"))
             )
@@ -1390,7 +1362,7 @@ class RewardModelWorker(Worker, DistProfilerExtension):
 
         omega_profiler_config = config.get("profiler", {})
         profiler_config = omega_conf_to_dataclass(omega_profiler_config, dataclass_type=ProfilerConfig)
-        if omega_profiler_config.get("tool", None) in ["npu", "nsys", "torch"]:
+        if omega_profiler_config.get("tool", None) in ["npu", "nsys", "torch", "torch_memory"]:
             tool_config = omega_conf_to_dataclass(
                 omega_profiler_config.get("tool_config", {}).get(omega_profiler_config.get("tool"))
             )

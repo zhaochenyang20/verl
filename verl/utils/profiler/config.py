@@ -51,6 +51,30 @@ class TorchProfilerToolConfig(BaseConfig):
 
 
 @dataclass
+class TorchMemoryToolConfig(BaseConfig):
+    """Torch memory profiler tool config.
+
+    Args:
+        trace_alloc_max_entries (int): Maximum number of memory allocation entries to track.
+        stack_depth (int): Stack trace depth for memory allocations.
+    """
+
+    trace_alloc_max_entries: int = 100_000
+    stack_depth: int = 32
+
+    def __post_init__(self) -> None:
+        """config validation logics go here"""
+        assert isinstance(self.trace_alloc_max_entries, int), (
+            f"trace_alloc_max_entries must be int, got {type(self.trace_alloc_max_entries)}"
+        )
+        assert isinstance(self.stack_depth, int), f"stack_depth must be int, got {type(self.stack_depth)}"
+        assert self.trace_alloc_max_entries > 0, (
+            f"trace_alloc_max_entries must be positive, got {self.trace_alloc_max_entries}"
+        )
+        assert self.stack_depth > 0, f"stack_depth must be positive, got {self.stack_depth}"
+
+
+@dataclass
 class NPUToolConfig(NsightToolConfig):
     """NPU profiler too; config."""
 
