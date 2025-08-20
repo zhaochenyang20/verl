@@ -340,14 +340,19 @@ global_profiler:
 
     # enable memory visualization for debugging memory usage
     torch_memory:
+
       #  Maximum number of allocation entries to record
       trace_alloc_max_entries: 100_000
+
       # The depth of the call stack to capture for each allocation
       stack_depth: 32
+
       # 'alloc': records only allocation events || 'state': records memory state changes || 'all': records both.
       context: "all"
+
       # 'python': records Python stacks || 'cpp': records C++ stacks (available in some versions) || 'all': records both.
       stacks: "all"
+
       # devices, record_context etc.
       kw_args: {}
   
