@@ -121,7 +121,7 @@ class ProfilerConfig(BaseConfig):
     ranks: list[int] = field(default_factory=list)
     save_path: Optional[str] = MISSING
     tool_config: Any = MISSING  # Just a placeholder, will use configs above directly
-    global_tool_config: Any = MISSING  # Global tool configuration for all profiling tools
+    global_tool_config: Optional[Any] = None  # Global tool configuration for all profiling tools
 
     def union(self, other: "ProfilerConfig") -> "ProfilerConfig":
         assert self.tool == other.tool, f"Cannot union ProfilerConfig with different tools: {self.tool} vs {other.tool}"
@@ -132,7 +132,7 @@ class ProfilerConfig(BaseConfig):
             ranks=list(set(self.ranks or []) | set(other.ranks or [])),
             save_path=self.save_path,
             tool_config=self.tool_config,
-            global_tool_config=self.global_tool_config,
+            global_tool_config=self.global_tool_config or other.global_tool_config,
         )
 
     def intersect(self, other: "ProfilerConfig") -> "ProfilerConfig":
@@ -146,7 +146,7 @@ class ProfilerConfig(BaseConfig):
             ranks=list(set(self.ranks or []) & set(other.ranks or [])),
             save_path=self.save_path,
             tool_config=self.tool_config,
-            global_tool_config=self.global_tool_config,
+            global_tool_config=self.global_tool_config if self.global_tool_config else other.global_tool_config,
         )
 
     def __post_init__(self) -> None:
