@@ -71,6 +71,7 @@ from verl.utils.fsdp_utils import (
     offload_fsdp_optimizer,
 )
 from verl.utils.import_utils import import_external_libs
+from verl.utils.memory_utils import MemorySnapshotSampler, enable_memory_visualize
 from verl.utils.model import compute_position_id_with_mask
 from verl.utils.profiler import DistProfiler, DistProfilerExtension, ProfilerConfig, log_gpu_memory_usage, simple_timer
 from verl.utils.profiler.performance import reduce_timing, topk_reduce_ratio_min_max
@@ -130,6 +131,34 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 init_method=os.environ.get("DIST_INIT_METHOD", None),
             )
 
+        if self.config.actor.profiler.tool == "torch_memory":
+            # Backward/forward compatible lookup for torch_memory config
+            # Priority:
+            # 1) actor.profiler.tool_config.torch_memory.*
+            # 2) actor.profiler.global_tool_config.torch_memory.* (legacy unit tests)
+            # 3) global_profiler.global_tool_config.torch_memory.* (CLI/global overrides)
+            # 4) sensible defaults
+            trace_alloc_max_entries = (
+                OmegaConf.select(self.config.actor.profiler, "tool_config.torch_memory.trace_alloc_max_entries")
+                or OmegaConf.select(
+                    self.config.actor.profiler, "global_tool_config.torch_memory.trace_alloc_max_entries"
+                )
+                or OmegaConf.select(
+                    self.config, "global_profiler.global_tool_config.torch_memory.trace_alloc_max_entries"
+                )
+            )
+            stack_depth = (
+                OmegaConf.select(self.config.actor.profiler, "tool_config.torch_memory.stack_depth")
+                or OmegaConf.select(self.config.actor.profiler, "global_tool_config.torch_memory.stack_depth")
+                or OmegaConf.select(self.config, "global_profiler.global_tool_config.torch_memory.stack_depth")
+            )
+
+            enable_memory_visualize(
+                trace_alloc_max_entries=trace_alloc_max_entries,
+                stack_depth=stack_depth,
+            )
+            self.memory_snapshot_sampler = MemorySnapshotSampler(out_dir=self.config.actor.profiler.save_path)
+
         # build device mesh for FSDP
         world_size = torch.distributed.get_world_size()
         # TODO(sgm): support FSDP hybrid shard for larger model
@@ -186,7 +215,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         # omega_profiler_config is DictConfig
         # profiler_config is a ProfilerConfig dataclass
         profiler_config = omega_conf_to_dataclass(omega_profiler_config, dataclass_type=ProfilerConfig)
-        if omega_profiler_config.get("tool", None) in ["npu", "nsys", "torch"]:
+        if omega_profiler_config.get("tool", None) in ["npu", "nsys", "torch", "torch_memory"]:
             tool_config = omega_conf_to_dataclass(
                 omega_profiler_config.get("tool_config", {}).get(omega_profiler_config.get("tool"))
             )
@@ -934,6 +963,14 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
     def stop_profile(self) -> None:
         """Stop profiling for the current rank in the current training step."""
         self.profiler.stop()
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def dump_memory_snapshot(self, tag: str = "manual", sub_dir: str = None) -> None:
+        """Manually trigger a CUDA memory snapshot dump on all ranks."""
+        # When torch_memory tool is enabled, memory history is already configured in __init__
+        # Fall back to default path if not provided
+        out_dir = self.config.actor.profiler.save_path
+        self.memory_snapshot_sampler.dump_memory_snapshot(out_dir=out_dir, tag=tag, sub_dir=sub_dir)
 
 
 class CriticWorker(Worker, DistProfilerExtension):
