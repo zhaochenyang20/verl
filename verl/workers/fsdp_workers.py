@@ -131,7 +131,8 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 init_method=os.environ.get("DIST_INIT_METHOD", None),
             )
 
-        if self.config.actor.profiler.tool == "torch_memory":
+        profiler_tool = OmegaConf.select(self.config, "actor.profiler.tool")
+        if profiler_tool == "torch_memory":
             # Backward/forward compatible lookup for torch_memory config
             # Priority:
             # 1) actor.profiler.tool_config.torch_memory.*
@@ -157,7 +158,9 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 trace_alloc_max_entries=trace_alloc_max_entries,
                 stack_depth=stack_depth,
             )
-            self.memory_snapshot_sampler = MemorySnapshotSampler(out_dir=self.config.actor.profiler.save_path)
+            self.memory_snapshot_sampler = MemorySnapshotSampler(
+                out_dir=OmegaConf.select(self.config, "actor.profiler.save_path")
+            )
 
         # build device mesh for FSDP
         world_size = torch.distributed.get_world_size()
@@ -968,8 +971,11 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
     def dump_memory_snapshot(self, tag: str = "manual", sub_dir: str = None) -> None:
         """Manually trigger a CUDA memory snapshot dump on all ranks."""
         # When torch_memory tool is enabled, memory history is already configured in __init__
+        # Guard when not enabled to avoid AttributeError in environments without profiler config
+        if not hasattr(self, "memory_snapshot_sampler"):
+            return None
         # Fall back to default path if not provided
-        out_dir = self.config.actor.profiler.save_path
+        out_dir = OmegaConf.select(self.config, "actor.profiler.save_path") or "."
         self.memory_snapshot_sampler.dump_memory_snapshot(out_dir=out_dir, tag=tag, sub_dir=sub_dir)
 
 
