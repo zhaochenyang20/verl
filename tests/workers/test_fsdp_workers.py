@@ -40,6 +40,7 @@ def test_actor_rollout_ref_worker_actor_ref_model():
         save_path: ./mem_snapshots
         tool_config:
           torch_memory:
+            _target_: verl.utils.profiler.config.TorchMemoryToolConfig
             trace_alloc_max_entries: 100000
             stack_depth: 32
     ref:
@@ -53,6 +54,7 @@ def test_actor_rollout_ref_worker_actor_ref_model():
         save_path: ./mem_snapshots
         tool_config:
           torch_memory:
+            _target_: verl.utils.profiler.config.TorchMemoryToolConfig
             trace_alloc_max_entries: 100000
             stack_depth: 32
       log_prob_micro_batch_size: 1
