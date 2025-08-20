@@ -19,6 +19,8 @@ Single Process Actor
 
 import logging
 import os
+import json
+import datetime
 
 import torch
 from torch import nn
@@ -47,6 +49,35 @@ __all__ = ["DataParallelPPOActor"]
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
+
+
+def _convert_tensors_to_lists(data):
+    """Recursively convert tensors and common model outputs to JSON-serializable lists/dicts."""
+    if isinstance(data, torch.Tensor):
+        try:
+            return data.detach().to("cpu").tolist()
+        except Exception:
+            return str(data)
+    if isinstance(data, dict):
+        return {k: _convert_tensors_to_lists(v) for k, v in data.items()}
+    if isinstance(data, (list, tuple)):
+        return [_convert_tensors_to_lists(item) for item in data]
+    # Handle common HF ModelOutput-like objects
+    if hasattr(data, "__dict__"):
+        output_dict = {}
+        for attr in ["logits", "log_probs", "entropy"]:
+            if hasattr(data, attr):
+                value = getattr(data, attr)
+                if value is not None:
+                    output_dict[attr] = _convert_tensors_to_lists(value)
+        # If nothing matched, fall back to repr
+        if not output_dict:
+            try:
+                return str(data)
+            except Exception:
+                return "<unserializable>"
+        return output_dict
+    return data
 
 
 class DataParallelPPOActor(BasePPOActor):
@@ -183,6 +214,32 @@ class DataParallelPPOActor(BasePPOActor):
                     **extra_args,
                 )  # prevent model thinks we are generating
 
+                # Debug logging (rmpad branch)
+                try:
+                    rank = torch.distributed.get_rank()
+                    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                    log_dir = "debug_logs"
+                    os.makedirs(log_dir, exist_ok=True)
+                    log_filename = os.path.join(log_dir, f"{rank}_{timestamp}.json")
+
+                    log_data = {
+                        "branch": "rmpad",
+                        "rank": rank,
+                        "timestamp": timestamp,
+                        "inputs": {
+                            "input_ids": _convert_tensors_to_lists(input_ids_rmpad),
+                            "attention_mask": None,
+                            "position_ids": _convert_tensors_to_lists(position_ids_rmpad),
+                            "multi_modal_inputs": _convert_tensors_to_lists(multi_modal_inputs),
+                            "extra_args": _convert_tensors_to_lists(extra_args),
+                        },
+                    }
+                    log_data["output"] = _convert_tensors_to_lists(output)
+                    with open(log_filename, "w") as f:
+                        json.dump(log_data, f, indent=2)
+                except Exception as e:
+                    logger.error(f"Rank {torch.distributed.get_rank() if torch.distributed.is_initialized() else 'NA'} error writing rmpad debug log: {e}")
+
                 if self.use_fused_kernels:
                     log_probs = output.log_probs.squeeze(0)  # (total_nnz,)
                     entropy_rmpad = output.entropy.squeeze(0)  # (total_nnz,)
@@ -260,6 +317,32 @@ class DataParallelPPOActor(BasePPOActor):
                     use_cache=False,
                     **extra_args,
                 )  # prevent model thinks we are generating
+
+                # Debug logging (non-rmpad branch)
+                try:
+                    rank = torch.distributed.get_rank()
+                    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                    log_dir = "debug_logs"
+                    os.makedirs(log_dir, exist_ok=True)
+                    log_filename = os.path.join(log_dir, f"{rank}_{timestamp}.json")
+
+                    log_data = {
+                        "branch": "no_rmpad",
+                        "rank": rank,
+                        "timestamp": timestamp,
+                        "inputs": {
+                            "input_ids": _convert_tensors_to_lists(input_ids),
+                            "attention_mask": _convert_tensors_to_lists(attention_mask),
+                            "position_ids": _convert_tensors_to_lists(position_ids),
+                            "multi_modal_inputs": _convert_tensors_to_lists(multi_modal_inputs),
+                            "extra_args": _convert_tensors_to_lists(extra_args),
+                        },
+                    }
+                    log_data["output"] = _convert_tensors_to_lists(output)
+                    with open(log_filename, "w") as f:
+                        json.dump(log_data, f, indent=2)
+                except Exception as e:
+                    logger.error(f"Rank {torch.distributed.get_rank() if torch.distributed.is_initialized() else 'NA'} error writing non-rmpad debug log: {e}")
 
                 if self.use_fused_kernels:
                     log_probs = output.log_probs[:, -response_length - 1 : -1]
