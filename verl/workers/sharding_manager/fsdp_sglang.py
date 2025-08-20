@@ -27,8 +27,8 @@ from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataP
 from verl import DataProto
 from verl.protocol import all_gather_data_proto
 from verl.utils.device import get_device_id, get_torch_device, set_expandable_segments
-from verl.utils.memory_utils import aggressive_empty_cache
 from verl.utils.fsdp_utils import fsdp_version, load_fsdp_model_to_gpu, offload_fsdp_model_to_cpu
+from verl.utils.memory_utils import aggressive_empty_cache
 from verl.utils.model import convert_weight_keys
 from verl.utils.profiler import GPUMemoryLogger, log_gpu_memory_usage, simple_timer
 from verl.utils.torch_functional import check_device_is_available
@@ -125,7 +125,6 @@ class FSDPSGLangShardingManager(BaseShardingManager):
 
     @GPUMemoryLogger(role="FSDPSGLangShardingManager enter", logger=logger)
     async def wake_up(self):
-        
         aggressive_empty_cache(force_sync=True)
 
         log_gpu_memory_usage("Before state_dict() in sharding manager memory", logger=logger)
